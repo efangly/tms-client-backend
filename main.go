@@ -25,6 +25,17 @@ func waitForEnter() {
 }
 
 func main() {
+	// Recover from any panic
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("\n❌ PANIC: %v", r)
+			log.Println("\n📋 Stack trace:")
+			log.Printf("%v", r)
+			waitForEnter()
+			os.Exit(1)
+		}
+	}()
+
 	// Load .env file
 	if err := godotenv.Load(); err != nil {
 		log.Println("⚠️  No .env file found, using environment variables")

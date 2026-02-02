@@ -9,8 +9,6 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-
-	"tms-backend/internal/utils"
 )
 
 var DB *gorm.DB
@@ -40,13 +38,14 @@ func Connect() error {
 	})
 
 	if err != nil {
-		utils.LogError("Database connection failed (host=%s, port=%s, dbname=%s): %v", host, port, dbname, err)
+		// Don't use utils.LogError here to avoid import cycle
+		// Error logging will be handled by the caller
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 
 	sqlDB, err := DB.DB()
 	if err != nil {
-		utils.LogError("Failed to get database instance: %v", err)
+		// Don't use utils.LogError here to avoid import cycle
 		return fmt.Errorf("failed to get database instance: %w", err)
 	}
 

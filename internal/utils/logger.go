@@ -16,9 +16,17 @@ var (
 
 // InitLogger initializes the logger to write to both console and file
 func InitLogger() error {
+	// Recover from any panic during initialization
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("⚠️  Logger initialization panic recovered: %v", r)
+		}
+	}()
+
 	// Create logs directory if it doesn't exist
 	logsDir := "logs"
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		log.Printf("⚠️  Failed to create logs directory: %v", err)
 		return fmt.Errorf("failed to create logs directory: %v", err)
 	}
 
@@ -30,6 +38,7 @@ func InitLogger() error {
 	// Open or create log file (append mode)
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
+		log.Printf("⚠️  Failed to open log file: %v", err)
 		return fmt.Errorf("failed to open log file: %v", err)
 	}
 
@@ -48,6 +57,13 @@ func InitLogger() error {
 
 // LogError logs an error message to both console and file
 func LogError(format string, v ...interface{}) {
+	// Recover from any panic
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[ERROR-PANIC] %v", r)
+		}
+	}()
+
 	if ErrorLogger != nil {
 		ErrorLogger.Printf(format, v...)
 	} else {
@@ -58,9 +74,17 @@ func LogError(format string, v ...interface{}) {
 
 // CloseLogger closes the log file
 func CloseLogger() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("⚠️  Error closing logger: %v", r)
+		}
+	}()
+
 	if logFile != nil {
 		logFile.Close()
+		logFile = nil
 	}
+	ErrorLogger = nil
 }
 
 // RotateLogFile rotates the log file if date has changed
