@@ -4,11 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
 
 	"tms-backend/internal/database"
 	"tms-backend/internal/models"
@@ -16,114 +16,109 @@ import (
 	"tms-backend/internal/utils"
 )
 
-// GetDevices returns all devices
+// GetDevices returns all machines (grouped by IP)
 func GetDevices(c *fiber.Ctx) error {
-	var devices []models.Device
-	if err := database.DB.Find(&devices).Error; err != nil {
+	var machines []models.MasterMachine
+	if err := database.DB.Find(&machines).Error; err != nil {
 		utils.LogError("GetDevices failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
-	return c.JSON(devices)
+	return c.JSON(machines)
 }
 
-// GetDevice returns a single device by ID
+// GetDevice returns a single machine by IP and probe
 func GetDevice(c *fiber.Ctx) error {
-	id := c.Params("id")
-	var device models.Device
-	if err := database.DB.First(&device, "id = ?", id).Error; err != nil {
-		return c.Status(404).JSON(fiber.Map{"error": "Device not found"})
+	machineIP := c.Params("id") // id is actually machineIP
+	probeNo := c.QueryInt("probeNo", 1)
+
+	var machine models.MasterMachine
+	if err := database.DB.First(&machine, "machine_ip = ? AND probe_no = ?", machineIP, probeNo).Error; err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Machine not found"})
 	}
-	return c.JSON(device)
+	return c.JSON(machine)
 }
 
-// CreateDevice creates a new device
+// CreateDevice creates a new machine entry
 func CreateDevice(c *fiber.Ctx) error {
-	device := new(models.Device)
-	if err := c.BodyParser(device); err != nil {
+	machine := new(models.MasterMachine)
+	if err := c.BodyParser(machine); err != nil {
 		utils.LogError("CreateDevice - Failed to parse body: %v", err)
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	// Generate UUID for new device
-	device.ID = uuid.New().String()
-	device.CreatedAt = database.GetThailandTime()
-	device.UpdatedAt = database.GetThailandTime()
+	// Set default probe_no if not provided
+	if machine.ProbeNo == 0 {
+		machine.ProbeNo = 1
+	}
 
-	if err := database.DB.Create(device).Error; err != nil {
-		utils.LogError("CreateDevice - Failed to create device: %v", err)
+	// Set default sType if not provided
+	if machine.SType == "" {
+		machine.SType = "t"
+	}
+
+	if err := database.DB.Create(machine).Error; err != nil {
+		utils.LogError("CreateDevice - Failed to create machine: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	// Also create master_machine entry for legacy compatibility
-	for i := 1; i <= device.Probe; i++ {
-		mm := models.MasterMachine{
-			MachineIP:   device.IP,
-			ProbeNo:     i,
-			ProbeAll:    device.Probe,
-			MachineName: device.Devicename,
-			MinTemp:     &device.Mintemp,
-			MaxTemp:     &device.Maxtemp,
-			AdjTemp:     &device.Adjtemp,
-		}
-		database.DB.Create(&mm)
-	}
-
-	return c.Status(201).JSON(device)
+	return c.Status(201).JSON(machine)
 }
 
-// UpdateDevice updates a device
+// UpdateDevice updates a machine
 func UpdateDevice(c *fiber.Ctx) error {
-	id := c.Params("id")
+	machineIP := c.Params("id") // id is actually machineIP
+	probeNo := c.QueryInt("probeNo", 0)
 
-	var device models.Device
-	if err := database.DB.First(&device, "id = ?", id).Error; err != nil {
-		utils.LogError("UpdateDevice - Device not found (id=%s): %v", id, err)
-		return c.Status(404).JSON(fiber.Map{"error": "Device not found"})
+	var machine models.MasterMachine
+	var err error
+
+	if probeNo > 0 {
+		// Update specific probe
+		err = database.DB.First(&machine, "machine_ip = ? AND probe_no = ?", machineIP, probeNo).Error
+	} else {
+		// Update first probe found for this IP
+		err = database.DB.First(&machine, "machine_ip = ?", machineIP).Error
 	}
 
-	var updates models.Device
+	if err != nil {
+		utils.LogError("UpdateDevice - Machine not found (ip=%s, probe=%d): %v", machineIP, probeNo, err)
+		return c.Status(404).JSON(fiber.Map{"error": "Machine not found"})
+	}
+
+	var updates map[string]interface{}
 	if err := c.BodyParser(&updates); err != nil {
 		utils.LogError("UpdateDevice - Failed to parse body: %v", err)
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	updates.UpdatedAt = database.GetThailandTime()
-
-	if err := database.DB.Model(&device).Updates(updates).Error; err != nil {
-		utils.LogError("UpdateDevice - Failed to update device (id=%s): %v", id, err)
+	if err := database.DB.Model(&machine).Updates(updates).Error; err != nil {
+		utils.LogError("UpdateDevice - Failed to update machine (ip=%s, probe=%d): %v", machineIP, probeNo, err)
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	// Update master_machine entries
-	database.DB.Model(&models.MasterMachine{}).
-		Where("machine_ip = ?", device.IP).
-		Updates(map[string]interface{}{
-			"machine_name": updates.Devicename,
-			"min_temp":     updates.Mintemp,
-			"max_temp":     updates.Maxtemp,
-			"adj_temp":     updates.Adjtemp,
-		})
+	// Reload the updated machine
+	database.DB.First(&machine, "machine_ip = ? AND probe_no = ?", machine.MachineIP, machine.ProbeNo)
 
-	return c.JSON(device)
+	return c.JSON(machine)
 }
 
-// DeleteDevice deletes a device
+// DeleteDevice deletes a machine entry
 func DeleteDevice(c *fiber.Ctx) error {
-	id := c.Params("id")
+	machineIP := c.Params("id") // id is actually machineIP
+	probeNo := c.QueryInt("probeNo", 0)
 
-	var device models.Device
-	if err := database.DB.First(&device, "id = ?", id).Error; err != nil {
-		utils.LogError("DeleteDevice - Device not found (id=%s): %v", id, err)
-		return c.Status(404).JSON(fiber.Map{"error": "Device not found"})
-	}
-
-	// Delete master_machine entries
-	database.DB.Where("machine_ip = ?", device.IP).Delete(&models.MasterMachine{})
-
-	// Delete device
-	if err := database.DB.Delete(&device).Error; err != nil {
-		utils.LogError("DeleteDevice - Failed to delete device (id=%s): %v", id, err)
-		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	if probeNo > 0 {
+		// Delete specific probe
+		if err := database.DB.Delete(&models.MasterMachine{}, "machine_ip = ? AND probe_no = ?", machineIP, probeNo).Error; err != nil {
+			utils.LogError("DeleteDevice - Failed to delete machine (ip=%s, probe=%d): %v", machineIP, probeNo, err)
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+	} else {
+		// Delete all probes for this IP
+		if err := database.DB.Delete(&models.MasterMachine{}, "machine_ip = ?", machineIP).Error; err != nil {
+			utils.LogError("DeleteDevice - Failed to delete machines (ip=%s): %v", machineIP, err)
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
 	}
 
 	return c.JSON(fiber.Map{"success": true})
@@ -137,27 +132,29 @@ func GetMachines(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	// Get latest temperature for each machine
-	type MachineWithTemp struct {
-		models.MasterMachine
-		CurrentTemp *float64 `json:"currentTemp"`
-		LastUpdate  *string  `json:"lastUpdate"`
-	}
-
-	var result []MachineWithTemp
+	// Get latest value for each machine
+	var result []models.MachineWithStatus
 	for _, m := range machines {
-		mwt := MachineWithTemp{MasterMachine: m}
+		mws := models.MachineWithStatus{
+			MasterMachine: m,
+			OnlineStatus:  "Offline",
+		}
 
 		var tempLog models.TempLog
 		if err := database.DB.Where("machine_ip = ? AND probe_no = ?", m.MachineIP, m.ProbeNo).
 			Order("insert_time DESC").
 			First(&tempLog).Error; err == nil {
-			mwt.CurrentTemp = tempLog.TempValue
+			mws.CurrentValue = tempLog.TempValue
 			lastUpdate := tempLog.InsertTime.Format("2006-01-02 15:04:05")
-			mwt.LastUpdate = &lastUpdate
+			mws.LastUpdate = &lastUpdate
+
+			// Check if online (last update within 10 minutes)
+			if time.Since(tempLog.InsertTime) < 10*time.Minute {
+				mws.OnlineStatus = "Online"
+			}
 		}
 
-		result = append(result, mwt)
+		result = append(result, mws)
 	}
 
 	return c.JSON(result)
@@ -166,11 +163,12 @@ func GetMachines(c *fiber.Ctx) error {
 // UpdateMachine updates a machine
 func UpdateMachine(c *fiber.Ctx) error {
 	machineIP := c.Params("machineIp")
-	probeNo := c.Params("probeNo")
+	probeNoStr := c.Params("probeNo")
+	probeNo, _ := strconv.Atoi(probeNoStr)
 
 	var machine models.MasterMachine
 	if err := database.DB.First(&machine, "machine_ip = ? AND probe_no = ?", machineIP, probeNo).Error; err != nil {
-		utils.LogError("UpdateMachine - Machine not found (ip=%s, probe=%s): %v", machineIP, probeNo, err)
+		utils.LogError("UpdateMachine - Machine not found (ip=%s, probe=%d): %v", machineIP, probeNo, err)
 		return c.Status(404).JSON(fiber.Map{"error": "Machine not found"})
 	}
 
@@ -181,9 +179,12 @@ func UpdateMachine(c *fiber.Ctx) error {
 	}
 
 	if err := database.DB.Model(&machine).Updates(updates).Error; err != nil {
-		utils.LogError("UpdateMachine - Failed to update machine (ip=%s, probe=%s): %v", machineIP, probeNo, err)
+		utils.LogError("UpdateMachine - Failed to update machine (ip=%s, probe=%d): %v", machineIP, probeNo, err)
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
+
+	// Reload the updated machine
+	database.DB.First(&machine, "machine_ip = ? AND probe_no = ?", machineIP, probeNo)
 
 	return c.JSON(machine)
 }
@@ -228,15 +229,9 @@ func GetTempLogReport(c *fiber.Ctx) error {
 	query := database.DB.Model(&models.TempLog{}).
 		Where("insert_time BETWEEN ? AND ?", start, end)
 
-	// Filter by devices if specified
+	// Filter by devices if specified (now using machine_ip)
 	if devices != "" {
-		var deviceList []models.Device
-		database.DB.Find(&deviceList, "id IN (?)", splitComma(devices))
-
-		var ips []string
-		for _, d := range deviceList {
-			ips = append(ips, d.IP)
-		}
+		ips := splitComma(devices)
 		if len(ips) > 0 {
 			query = query.Where("machine_ip IN ?", ips)
 		}
@@ -248,12 +243,13 @@ func GetTempLogReport(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	// Build a lookup map of machine_ip -> device_name
-	var allDevices []models.Device
-	database.DB.Find(&allDevices)
-	deviceNameMap := make(map[string]string)
-	for _, d := range allDevices {
-		deviceNameMap[d.IP] = d.Devicename
+	// Build a lookup map of machine_ip:probe_no -> machine_name
+	var allMachines []models.MasterMachine
+	database.DB.Find(&allMachines)
+	machineNameMap := make(map[string]string)
+	for _, m := range allMachines {
+		key := fmt.Sprintf("%s:%d", m.MachineIP, m.ProbeNo)
+		machineNameMap[key] = m.MachineName
 	}
 
 	// Build series for chart
@@ -268,16 +264,17 @@ func GetTempLogReport(c *fiber.Ctx) error {
 
 	seriesMap := make(map[string]*Series)
 	for _, logItem := range logs {
-		deviceName := deviceNameMap[logItem.MachineIP]
-		if deviceName == "" {
-			deviceName = logItem.MachineIP // fallback to IP
+		key := fmt.Sprintf("%s:%d", logItem.MachineIP, logItem.ProbeNo)
+		machineName := machineNameMap[key]
+		if machineName == "" {
+			machineName = logItem.MachineIP // fallback to IP
 		}
-		key := fmt.Sprintf("%s-P%d", deviceName, logItem.ProbeNo)
-		if seriesMap[key] == nil {
-			seriesMap[key] = &Series{Label: key, Data: []SeriesPoint{}}
+		seriesKey := fmt.Sprintf("%s-P%d", machineName, logItem.ProbeNo)
+		if seriesMap[seriesKey] == nil {
+			seriesMap[seriesKey] = &Series{Label: seriesKey, Data: []SeriesPoint{}}
 		}
 		if logItem.TempValue != nil {
-			seriesMap[key].Data = append(seriesMap[key].Data, SeriesPoint{
+			seriesMap[seriesKey].Data = append(seriesMap[seriesKey].Data, SeriesPoint{
 				X: logItem.InsertTime.Format(time.RFC3339),
 				Y: *logItem.TempValue,
 			})
