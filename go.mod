@@ -1,8 +1,9 @@
 module tms-backend
 
-go 1.21
+go 1.24.0
 
 require (
+	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/gofiber/fiber/v2 v2.52.0
 	github.com/joho/godotenv v1.5.1
 	gorm.io/driver/mysql v1.5.2
@@ -13,6 +14,7 @@ require (
 	github.com/andybalholm/brotli v1.0.5 // indirect
 	github.com/go-sql-driver/mysql v1.7.0 // indirect
 	github.com/google/uuid v1.5.0 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/klauspost/compress v1.17.3 // indirect
@@ -23,5 +25,7 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.51.0 // indirect
 	github.com/valyala/tcplisten v1.0.0 // indirect
-	golang.org/x/sys v0.15.0 // indirect
+	golang.org/x/net v0.44.0 // indirect
+	golang.org/x/sync v0.17.0 // indirect
+	golang.org/x/sys v0.36.0 // indirect
 )

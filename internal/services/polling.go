@@ -3,8 +3,10 @@ package services
 import (
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +34,17 @@ type DataSavedEvent struct {
 	Errors int `json:"errors"`
 }
 
+// MaxSensorTemp is the maximum valid sensor temperature; readings above this are considered sensor errors
+const MaxSensorTemp = 80.0
+
+// TemperatureUpdateEvent represents real-time temperature data (same as MQTT payload)
+type TemperatureUpdateEvent struct {
+	MachineName string  `json:"machineName"`
+	TempValue   float64 `json:"tempValue"`
+	Status      string  `json:"status"` // N=Normal, H=High, L=Low
+	Timestamp   string  `json:"timestamp"`
+}
+
 // PollingService handles temperature polling
 type PollingService struct {
 	pollInterval           time.Duration
@@ -41,8 +54,10 @@ type PollingService struct {
 	running                bool
 	mu                     sync.Mutex
 	subscribers            []chan DataSavedEvent
+	temperatureSubscribers []chan []TemperatureUpdateEvent
 	subMu                  sync.Mutex
 	apiNotificationService *APINotificationService
+	mqttService            *MQTTService
 }
 
 // Device alert state tracking
@@ -56,7 +71,9 @@ func NewPollingService() *PollingService {
 		alertInterval:          5 * time.Second,
 		stopChan:               make(chan struct{}),
 		subscribers:            make([]chan DataSavedEvent, 0),
+		temperatureSubscribers: make([]chan []TemperatureUpdateEvent, 0),
 		apiNotificationService: NewAPINotificationService(),
+		mqttService:            GlobalMQTTService,
 	}
 }
 
@@ -84,8 +101,44 @@ func (p *PollingService) Unsubscribe(ch chan DataSavedEvent) {
 	}
 }
 
+// SubscribeTemperature to temperature update events
+func (p *PollingService) SubscribeTemperature() chan []TemperatureUpdateEvent {
+	p.subMu.Lock()
+	defer p.subMu.Unlock()
+
+	ch := make(chan []TemperatureUpdateEvent, 10)
+	p.temperatureSubscribers = append(p.temperatureSubscribers, ch)
+	return ch
+}
+
+// UnsubscribeTemperature from temperature update events
+func (p *PollingService) UnsubscribeTemperature(ch chan []TemperatureUpdateEvent) {
+	p.subMu.Lock()
+	defer p.subMu.Unlock()
+
+	for i, sub := range p.temperatureSubscribers {
+		if sub == ch {
+			p.temperatureSubscribers = append(p.temperatureSubscribers[:i], p.temperatureSubscribers[i+1:]...)
+			close(ch)
+			break
+		}
+	}
+}
+
 // Start the polling service
 func (p *PollingService) Start() {
+	// Recover from any panic in polling service
+	defer func() {
+		if r := recover(); r != nil {
+			utils.LogError("PANIC in polling service: %v", r)
+			log.Printf("❌ PANIC in polling service: %v", r)
+			log.Println("⚠️  Possible charset mismatch - check DB_CHARSET setting")
+			p.mu.Lock()
+			p.running = false
+			p.mu.Unlock()
+		}
+	}()
+
 	p.mu.Lock()
 	if p.running {
 		p.mu.Unlock()
@@ -107,14 +160,57 @@ func (p *PollingService) Start() {
 		log.Println("- Legacy API: DISABLED (LEGACY_API_URL not configured)")
 	}
 
-	// Initial poll
-	log.Println("Running initial poll and save...")
-	p.pollAndSave()
+	if p.mqttService != nil && p.mqttService.IsEnabled() {
+		log.Println("- MQTT: ENABLED")
+		log.Println("  • Publish temperature every 5 seconds")
+	} else {
+		log.Println("- MQTT: DISABLED (MQTT_BROKER not configured)")
+	}
+
+	// รอให้ database connection stable ก่อน poll ครั้งแรก
+	log.Println("⏳ Waiting for database connection to stabilize...")
+	time.Sleep(3 * time.Second)
+
+	// ทดสอบ GetThailandTime() และ database connection
+	testTime := database.GetThailandTime()
+	log.Printf("✅ Timezone test: %v", testTime.Format("2006-01-02 15:04:05.000 MST"))
+
+	// Test database connection
+	sqlDB, err := database.DB.DB()
+	if err == nil {
+		if err := sqlDB.Ping(); err != nil {
+			log.Printf("⚠️  Database ping failed: %v", err)
+		} else {
+			log.Println("✅ Database connection verified")
+		}
+	}
+
+	// Initial poll with error handling
+	log.Println("🔄 Running initial poll and save...")
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				utils.LogError("PANIC in initial pollAndSave: %v", r)
+				log.Printf("❌ PANIC in initial poll: %v", r)
+				log.Println("⚠️  This is likely a charset encoding issue")
+				log.Println("💡 Check your DB_CHARSET setting in .env file")
+				log.Println("   - Use DB_CHARSET=tis620 for Thai TIS-620 database")
+				log.Println("   - Use DB_CHARSET=utf8mb4 for UTF-8 database")
+			}
+		}()
+		p.pollAndSave()
+	}()
 
 	// Start poll ticker
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				utils.LogError("PANIC in poll ticker: %v", r)
+				log.Printf("❌ PANIC in poll ticker: %v", r)
+			}
+		}()
 		ticker := time.NewTicker(p.pollInterval)
 		defer ticker.Stop()
 
@@ -163,6 +259,16 @@ func (p *PollingService) Stop() {
 
 // pollAndSave polls all devices and saves data
 func (p *PollingService) pollAndSave() {
+	// Recover from any panic during poll cycle
+	defer func() {
+		if r := recover(); r != nil {
+			utils.LogError("PANIC in pollAndSave: %v", r)
+			log.Printf("❌ PANIC in pollAndSave: %v", r)
+			log.Println("⚠️  Charset mismatch detected!")
+			log.Println("📋 Your database likely uses a different charset than configured")
+		}
+	}()
+
 	startTime := time.Now()
 	log.Println("=== Starting Poll & Save cycle ===")
 
@@ -170,7 +276,9 @@ func (p *PollingService) pollAndSave() {
 	var machines []models.MasterMachine
 	if err := database.DB.Find(&machines).Error; err != nil {
 		utils.LogError("pollAndSave - Failed to load machines: %v", err)
-		log.Printf("Error loading machines: %v", err)
+		log.Printf("❌ Error loading machines: %v", err)
+		log.Println("⚠️  This might be a charset encoding issue")
+		log.Println("💡 Check if DB_CHARSET in .env matches your database charset")
 		return
 	}
 
@@ -184,7 +292,7 @@ func (p *PollingService) pollAndSave() {
 
 	savedCount := 0
 	errorCount := 0
-	now := database.GetThailandTime()
+	now := database.GetThailandTime().Truncate(time.Microsecond)
 	sDate := now.Format("20060102")
 	sTime := now.Format("15")
 
@@ -211,6 +319,12 @@ func (p *PollingService) pollAndSave() {
 
 		// Save data for each probe received
 		for _, probeData := range response.Probes {
+			// Check for invalid sensor data (0xFFFF = 65535 or -1 indicates broken sensor)
+			if probeData.RealValue == 65535 || probeData.RealValue == -1 {
+				log.Printf("  ⚠️  Skipping broken sensor data: %s Probe %d (RealValue: 0x%04X)", probes[0].MachineName, probeData.ProbeNo, uint16(probeData.RealValue))
+				continue
+			}
+
 			// Get probe config (use default values if not found)
 			probeConfig, hasConfig := probeConfigs[probeData.ProbeNo]
 			if !hasConfig {
@@ -223,8 +337,16 @@ func (p *PollingService) pollAndSave() {
 				probeConfig.SType = "t"
 			}
 
-			// Apply temperature adjustment
+			// Apply temperature adjustment and round to 2 decimal places
 			adjustedTemp := probeData.TempValue + probeConfig.GetAdjTemp()
+			adjustedTemp = math.Round(adjustedTemp*100) / 100
+
+			// Validate sensor reading - skip if temp exceeds threshold (likely sensor error)
+			if adjustedTemp > MaxSensorTemp {
+				log.Printf("  ⚠️  Skipping sensor error: %s Probe %d temp=%.2f°C exceeds %.0f°C threshold",
+					probeConfig.MachineName, probeData.ProbeNo, adjustedTemp, MaxSensorTemp)
+				continue
+			}
 
 			tempStatus := "N" // Normal
 			if adjustedTemp < probeConfig.GetMinTemp() {
@@ -236,6 +358,13 @@ func (p *PollingService) pollAndSave() {
 			// Convert RealValue to int (as per database schema)
 			realValueInt := probeData.RealValue
 
+			// Create unique timestamp for insert_time to avoid duplicate key
+			// Truncate to microsecond precision (6 decimal places) for MySQL DATETIME compatibility
+			insertTime := database.GetThailandTime().Truncate(time.Microsecond)
+
+			// Debug: Log the timestamp being used
+			log.Printf("  🕐 InsertTime for %s Probe %d: %v", machineName, probeData.ProbeNo, insertTime)
+
 			// Create temp log entry
 			tempLog := models.TempLog{
 				MachineIP:  ip,
@@ -245,36 +374,43 @@ func (p *PollingService) pollAndSave() {
 				RealValue:  &realValueInt,
 				Status:     &tempStatus,
 				SendTime:   &now,
-				InsertTime: now,
+				InsertTime: insertTime,
 				SDate:      &sDate,
 				STime:      &sTime,
 			}
 
+			// Insert the log - if duplicate, skip it
 			if err := database.DB.Create(&tempLog).Error; err != nil {
-				utils.LogError("pollAndSave - Failed to save temp log (machine=%s, probe=%d): %v", machineName, probeData.ProbeNo, err)
-				log.Printf("Error saving temp log: %v", err)
-				errorCount++
+				// Check if it's a duplicate key error
+				if strings.Contains(err.Error(), "Duplicate entry") || strings.Contains(err.Error(), "1062") {
+					// Skip duplicate - this is expected if polling faster than microsecond precision
+					log.Printf("  ⚠️  Duplicate log entry skipped for %s Probe %d", probeConfig.MachineName, probeData.ProbeNo)
+				} else {
+					utils.LogError("pollAndSave - Failed to save temp log (machine=%s, probe=%d): %v", probeConfig.MachineName, probeData.ProbeNo, err)
+					log.Printf("❌ Error saving temp log: %v", err)
+					errorCount++
+				}
 			} else {
 				unit := probeConfig.GetUnit()
-				log.Printf("  ✅ %s Probe %d: %.2f%s [%s]", machineName, probeData.ProbeNo, adjustedTemp, unit, probeConfig.GetTypeLabel())
+				log.Printf("  ✅ %s Probe %d: %.2f%s [%s]", probeConfig.MachineName, probeData.ProbeNo, adjustedTemp, unit, probeConfig.GetTypeLabel())
 				savedCount++
 
 				// ส่งข้อมูลไป Legacy API
 				if p.apiNotificationService.IsLegacyAPIEnabled() {
 					payload := TempLogPayload{
-						McuID:     fmt.Sprintf("%s(%d)", machineName, probeData.ProbeNo),
-						Status:    "00000110", // Normal status
+						McuID:     probeConfig.MachineName, // ใช้ชื่อของ probe นี้โดยเฉพาะ
+						Status:    "00000110",              // Normal status
 						TempValue: adjustedTemp,
 						RealValue: realValueInt,
 						Date:      sDate,
 						Time:      sTime,
 					}
-					go func(pl TempLogPayload) {
+					go func(pl TempLogPayload, probeName string, probeNo int) {
 						if err := p.apiNotificationService.SendTempLog(pl); err != nil {
-							utils.LogError("pollAndSave - Failed to send to Legacy API (machine=%s, probe=%d): %v", machineName, probeData.ProbeNo, err)
+							utils.LogError("pollAndSave - Failed to send to Legacy API (machine=%s, probe=%d): %v", probeName, probeNo, err)
 							log.Printf("Failed to send to Legacy API: %v", err)
 						}
-					}(payload)
+					}(payload, probeConfig.MachineName, probeData.ProbeNo)
 				}
 			}
 
@@ -308,6 +444,10 @@ func (p *PollingService) checkAlerts() {
 		machinesByIP[m.MachineIP] = append(machinesByIP[m.MachineIP], m)
 	}
 
+	// Collect MQTT payloads for batch publish
+	var mqttPayloads []MQTTTemperaturePayload
+	now := database.GetThailandTime()
+
 	for ip, probes := range machinesByIP {
 		machineName := probes[0].MachineName
 
@@ -329,15 +469,72 @@ func (p *PollingService) checkAlerts() {
 		}
 
 		for _, probeData := range response.Probes {
+			// Skip broken sensor data (0xFFFF = 65535 or -1)
+			if probeData.RealValue == 65535 || probeData.RealValue == -1 {
+				continue
+			}
+
 			probeConfig, hasConfig := probeConfigs[probeData.ProbeNo]
 			if !hasConfig {
 				probeConfig = probes[0]
 				probeConfig.ProbeNo = probeData.ProbeNo
 			}
 
+			// Apply temperature adjustment and round to 2 decimal places
 			adjustedTemp := probeData.TempValue + probeConfig.GetAdjTemp()
+			adjustedTemp = math.Round(adjustedTemp*100) / 100
+
+			// Validate sensor reading - skip if temp exceeds threshold (likely sensor error)
+			if adjustedTemp > MaxSensorTemp {
+				log.Printf("  ⚠️  Skipping sensor error: %s Probe %d temp=%.2f°C exceeds %.0f°C threshold",
+					probeConfig.MachineName, probeData.ProbeNo, adjustedTemp, MaxSensorTemp)
+				continue
+			}
+
 			p.checkProbeAlert(probeConfig, probeData.ProbeNo, adjustedTemp)
+
+			// Determine current status
+			tempStatus := "N" // Normal
+			if adjustedTemp < probeConfig.GetMinTemp() {
+				tempStatus = "L" // Low
+			} else if adjustedTemp > probeConfig.GetMaxTemp() {
+				tempStatus = "H" // High
+			}
+
+			// Collect MQTT payload
+			if p.mqttService != nil && p.mqttService.IsConnected() {
+				mqttPayloads = append(mqttPayloads, MQTTTemperaturePayload{
+					MachineName: probeConfig.MachineName,
+					TempValue:   adjustedTemp,
+					Status:      tempStatus,
+					Timestamp:   now.Format("2006-01-02 15:04:05"),
+				})
+			}
 		}
+	}
+
+	// Publish all temperature readings via MQTT as batch
+	if p.mqttService != nil && p.mqttService.IsConnected() && len(mqttPayloads) > 0 {
+		go func(payloads []MQTTTemperaturePayload) {
+			if err := p.mqttService.PublishTemperatureBatch(payloads); err != nil {
+				utils.LogError("MQTT batch publish failed: %v", err)
+			}
+		}(mqttPayloads)
+	}
+
+	// Send temperature data via SSE using same payload structure
+	if len(mqttPayloads) > 0 {
+		// Convert MQTT payload to SSE event
+		sseEvents := make([]TemperatureUpdateEvent, 0, len(mqttPayloads))
+		for _, mqtt := range mqttPayloads {
+			sseEvents = append(sseEvents, TemperatureUpdateEvent{
+				MachineName: mqtt.MachineName,
+				TempValue:   mqtt.TempValue,
+				Status:      mqtt.Status,
+				Timestamp:   mqtt.Timestamp,
+			})
+		}
+		p.notifyTemperatureSubscribers(sseEvents)
 	}
 }
 
@@ -363,7 +560,7 @@ func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo i
 
 	// Check for state change
 	if currentState != prevState {
-		now := database.GetThailandTime()
+		now := database.GetThailandTime().Truncate(time.Microsecond)
 		dateStr := now.Format("20060102")
 		timeStr := now.Format("15:04:05")
 
@@ -385,43 +582,38 @@ func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo i
 				machine.MachineName, probeNo, typeLabel, temp, unit, alertTypeStr,
 				minTemp, maxTemp)
 
+			// Create unique timestamp to avoid duplicate key
+			// Truncate to microsecond precision (6 decimal places) for MySQL DATETIME compatibility
+			errorTime := database.GetThailandTime().Truncate(time.Microsecond)
+
 			// Create temp error record
 			tempError := models.TempError{
 				MachineIP:   machine.MachineIP,
 				ProbeNo:     probeNo,
 				MachineName: &machine.MachineName,
 				TempValue:   &temp,
-				ErrorTime:   now,
+				ErrorTime:   errorTime,
 				MinTemp:     &minTemp,
 				MaxTemp:     &maxTemp,
 				TempStatus:  "p", // process
 				ErrorType:   "o", // over
 				SType:       machine.SType,
 			}
-			database.DB.Create(&tempError)
+
+			// Insert temp error - skip if duplicate
+			if err := database.DB.Create(&tempError).Error; err != nil {
+				if !strings.Contains(err.Error(), "Duplicate entry") && !strings.Contains(err.Error(), "1062") {
+					utils.LogError("checkAlerts - Failed to create temp_error: %v", err)
+				}
+			}
 
 			// Note: temp_log is already created in pollAndSave()
 			// No need to insert again here to avoid duplicate key error
 
 			// ส่ง Alert API notification
 			if p.apiNotificationService.IsLegacyAPIEnabled() {
-				// Get McuID from latest probe data
-				response := tcpclient.RequestFromTCPServer(
-					tcpclient.ServerConfig{
-						IP:   machine.MachineIP,
-						Port: defaultTCPPort,
-						Name: machine.MachineName,
-					},
-					"A",
-					3*time.Second,
-				)
+				// ใช้ชื่อเครื่องเฉพาะ ไม่ใส่ probe no
 				mcuID := machine.MachineName
-				for _, pd := range response.Probes {
-					if pd.ProbeNo == probeNo {
-						mcuID = fmt.Sprintf("%s(%d)", pd.McuID, pd.ProbeNo)
-						break
-					}
-				}
 				alertPayload := AlertPayload{
 					McuID:       mcuID,
 					Status:      map[string]string{"H": "00000010", "L": "00000011"}[currentState],
@@ -459,23 +651,8 @@ func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo i
 
 			// ส่ง Alert API notification ว่ากลับปกติ
 			if p.apiNotificationService.IsLegacyAPIEnabled() {
-				// Get McuID from latest probe data
-				response := tcpclient.RequestFromTCPServer(
-					tcpclient.ServerConfig{
-						IP:   machine.MachineIP,
-						Port: defaultTCPPort,
-						Name: machine.MachineName,
-					},
-					"A",
-					3*time.Second,
-				)
+				// ใช้ชื่อเครื่องเฉพาะ ไม่ใส่ probe no
 				mcuID := machine.MachineName
-				for _, pd := range response.Probes {
-					if pd.ProbeNo == probeNo {
-						mcuID = fmt.Sprintf("%s(%d)", machine.MachineName, pd.ProbeNo)
-						break
-					}
-				}
 				alertPayload := AlertPayload{
 					McuID:       mcuID,
 					Status:      "00000001", // Normal
@@ -516,6 +693,20 @@ func (p *PollingService) notifySubscribers(event DataSavedEvent) {
 	for _, ch := range p.subscribers {
 		select {
 		case ch <- event:
+		default:
+			// Channel full, skip
+		}
+	}
+}
+
+// notifyTemperatureSubscribers notifies all subscribers of temperature updates
+func (p *PollingService) notifyTemperatureSubscribers(events []TemperatureUpdateEvent) {
+	p.subMu.Lock()
+	defer p.subMu.Unlock()
+
+	for _, ch := range p.temperatureSubscribers {
+		select {
+		case ch <- events:
 		default:
 			// Channel full, skip
 		}

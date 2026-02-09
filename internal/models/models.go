@@ -2,6 +2,8 @@ package models
 
 import (
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // MasterMachine represents the master_machine table (main device/probe config)
@@ -101,9 +103,20 @@ type TempLog struct {
 	RealValue  *int       `gorm:"column:real_value" json:"realValue"`
 	Status     *string    `gorm:"column:status;size:8" json:"status"`
 	SendTime   *time.Time `gorm:"column:send_time" json:"sendTime"`
-	InsertTime time.Time  `gorm:"column:insert_time;primaryKey" json:"insertTime"`
+	InsertTime time.Time  `gorm:"column:insert_time;primaryKey;type:datetime" json:"insertTime"`
 	SDate      *string    `gorm:"column:sDate;size:8" json:"sDate"`
 	STime      *string    `gorm:"column:sTime;size:2" json:"sTime"`
+}
+
+// BeforeCreate is a GORM hook that runs before creating a record
+func (t *TempLog) BeforeCreate(tx *gorm.DB) error {
+	// Ensure InsertTime is set and format it explicitly
+	if t.InsertTime.IsZero() {
+		t.InsertTime = time.Now()
+	}
+	// Force GORM to use the exact timestamp value
+	tx.Statement.SetColumn("insert_time", t.InsertTime.Format("2006-01-02 15:04:05.000"))
+	return nil
 }
 
 // TableName specifies table name for TempLog
@@ -117,7 +130,7 @@ type TempError struct {
 	ProbeNo        int        `gorm:"column:probe_no;primaryKey" json:"probeNo"`
 	MachineName    *string    `gorm:"column:machine_name;size:50" json:"machineName"`
 	TempValue      *float64   `gorm:"column:temp_value" json:"tempValue"`
-	ErrorTime      time.Time  `gorm:"column:error_time;primaryKey" json:"errorTime"`
+	ErrorTime      time.Time  `gorm:"column:error_time;primaryKey;type:datetime" json:"errorTime"`
 	SmsStatus      int        `gorm:"column:sms_status;default:0" json:"smsStatus"`
 	SmsSendTime    *time.Time `gorm:"column:sms_send_time" json:"smsSendTime"`
 	SmsSendStatus  int        `gorm:"column:sms_send_status;default:0" json:"smsSendStatus"`
@@ -141,6 +154,17 @@ type TempError struct {
 // TableName specifies table name for TempError
 func (TempError) TableName() string {
 	return "temp_error"
+}
+
+// BeforeCreate is a GORM hook for TempError
+func (t *TempError) BeforeCreate(tx *gorm.DB) error {
+	// Ensure ErrorTime is set and format it explicitly
+	if t.ErrorTime.IsZero() {
+		t.ErrorTime = time.Now()
+	}
+	// Force GORM to use the exact timestamp value
+	tx.Statement.SetColumn("error_time", t.ErrorTime.Format("2006-01-02 15:04:05.000"))
+	return nil
 }
 
 // ConfigValue represents the config_value table

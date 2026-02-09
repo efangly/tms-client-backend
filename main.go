@@ -64,6 +64,18 @@ func main() {
 	}
 	log.Println("✅ Database connected successfully")
 
+	// Initialize MQTT service
+	log.Println("📡 Initializing MQTT service...")
+	services.GlobalMQTTService = services.NewMQTTService()
+	if services.GlobalMQTTService.IsEnabled() {
+		if err := services.GlobalMQTTService.Connect(); err != nil {
+			utils.LogError("Failed to connect to MQTT broker: %v", err)
+			log.Printf("⚠️  MQTT connection failed: %v", err)
+			log.Println("   Continuing without MQTT...")
+		}
+		defer services.GlobalMQTTService.Disconnect()
+	}
+
 	// Initialize Fiber app
 	app := fiber.New(fiber.Config{
 		AppName: "TMS Backend API",
@@ -110,6 +122,7 @@ func main() {
 	api.Get("/temperature-stream", handlers.TemperatureStream)
 
 	// Start polling service
+	log.Println("🔄 Starting polling service...")
 	pollingSvc := services.NewPollingService()
 	go pollingSvc.Start()
 
