@@ -83,11 +83,7 @@ func main() {
 
 	// Middleware
 	app.Use(logger.New())
-	app.Use(cors.New(cors.Config{
-		AllowOrigins: "*",
-		AllowMethods: "GET,POST,PUT,DELETE,OPTIONS",
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization",
-	}))
+	app.Use(cors.New())
 
 	// Health check
 	app.Get("/health", func(c *fiber.Ctx) error {
@@ -123,8 +119,7 @@ func main() {
 
 	// Start polling service
 	log.Println("🔄 Starting polling service...")
-	pollingSvc := services.NewPollingService()
-	go pollingSvc.Start()
+	go services.GlobalPollingService.Start()
 
 	// Graceful shutdown
 	c := make(chan os.Signal, 1)
@@ -132,7 +127,7 @@ func main() {
 	go func() {
 		<-c
 		log.Println("Shutting down gracefully...")
-		pollingSvc.Stop()
+		services.GlobalPollingService.Stop()
 		app.Shutdown()
 		os.Exit(0)
 	}()

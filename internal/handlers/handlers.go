@@ -323,76 +323,20 @@ func TemperatureStream(c *fiber.Ctx) error {
 	c.Set("Connection", "keep-alive")
 	c.Set("Access-Control-Allow-Origin", "*")
 
-	// Subscribe to data saved events
+	// Subscribe to both data saved events and temperature updates from polling service
 	eventChan := services.GlobalPollingService.Subscribe()
+	tempChan := services.GlobalPollingService.SubscribeTemperature()
 
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
 		// Send initial connection message
 		fmt.Fprintf(w, "data: {\"type\":\"connected\"}\n\n")
 		w.Flush()
 
-		// Helper function to get latest temperature data
-		sendTemperatureData := func() error {
-			var machines []models.MasterMachine
-			if err := database.DB.Find(&machines).Error; err != nil {
-				return err
-			}
-
-			// Get latest temperature for each machine
-			var tempData []map[string]interface{}
-			now := time.Now().Format("2006-01-02 15:04:05")
-
-			for _, machine := range machines {
-				var tempLog models.TempLog
-				err := database.DB.Where("machine_ip = ? AND probe_no = ?", machine.MachineIP, machine.ProbeNo).
-					Order("insert_time DESC").
-					First(&tempLog).Error
-
-				if err == nil && tempLog.TempValue != nil {
-					// Determine status
-					tempValue := *tempLog.TempValue
-					status := "N" // Normal
-					if tempValue < machine.GetMinTemp() {
-						status = "L" // Low
-					} else if tempValue > machine.GetMaxTemp() {
-						status = "H" // High
-					}
-
-					tempData = append(tempData, map[string]interface{}{
-						"machineName": machine.MachineName,
-						"tempValue":   tempValue,
-						"status":      status,
-						"timestamp":   tempLog.InsertTime.Format("2006-01-02 15:04:05"),
-					})
-				}
-			}
-
-			if len(tempData) > 0 {
-				data, err := json.Marshal(fiber.Map{
-					"type":        "temperature",
-					"data":        tempData,
-					"count":       len(tempData),
-					"lastUpdated": now,
-				})
-				if err == nil {
-					fmt.Fprintf(w, "data: %s\n\n", data)
-					return w.Flush()
-				}
-			}
-			return nil
-		}
-
-		// Send initial temperature data
-		sendTemperatureData()
-
-		// Send temperature data every 5 seconds (same as MQTT)
-		tempTicker := time.NewTicker(5 * time.Second)
-		defer tempTicker.Stop()
-
 		// Send heartbeat every 30 seconds
 		heartbeat := time.NewTicker(30 * time.Second)
 		defer heartbeat.Stop()
 		defer services.GlobalPollingService.Unsubscribe(eventChan)
+		defer services.GlobalPollingService.UnsubscribeTemperature(tempChan)
 
 		for {
 			select {
@@ -405,10 +349,22 @@ func TemperatureStream(c *fiber.Ctx) error {
 				if err := w.Flush(); err != nil {
 					return
 				}
-			case <-tempTicker.C:
-				// Send temperature data every 5 seconds
-				if err := sendTemperatureData(); err != nil {
+			case tempEvents, ok := <-tempChan:
+				if !ok {
 					return
+				}
+				// Send temperature data from polling service (every 5 seconds)
+				data, err := json.Marshal(fiber.Map{
+					"type":        "temperature",
+					"data":        tempEvents,
+					"count":       len(tempEvents),
+					"lastUpdated": time.Now().Format("2006-01-02 15:04:05"),
+				})
+				if err == nil {
+					fmt.Fprintf(w, "data: %s\n\n", data)
+					if err := w.Flush(); err != nil {
+						return
+					}
 				}
 			case <-heartbeat.C:
 				fmt.Fprintf(w, ": heartbeat\n\n")

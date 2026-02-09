@@ -501,19 +501,17 @@ func (p *PollingService) checkAlerts() {
 				tempStatus = "H" // High
 			}
 
-			// Collect MQTT payload
-			if p.mqttService != nil && p.mqttService.IsConnected() {
-				mqttPayloads = append(mqttPayloads, MQTTTemperaturePayload{
-					MachineName: probeConfig.MachineName,
-					TempValue:   adjustedTemp,
-					Status:      tempStatus,
-					Timestamp:   now.Format("2006-01-02 15:04:05"),
-				})
-			}
+			// Collect temperature data payload (for both MQTT and SSE)
+			mqttPayloads = append(mqttPayloads, MQTTTemperaturePayload{
+				MachineName: probeConfig.MachineName,
+				TempValue:   adjustedTemp,
+				Status:      tempStatus,
+				Timestamp:   now.Format("2006-01-02 15:04:05"),
+			})
 		}
 	}
 
-	// Publish all temperature readings via MQTT as batch
+	// Publish all temperature readings via MQTT as batch (if MQTT is connected)
 	if p.mqttService != nil && p.mqttService.IsConnected() && len(mqttPayloads) > 0 {
 		go func(payloads []MQTTTemperaturePayload) {
 			if err := p.mqttService.PublishTemperatureBatch(payloads); err != nil {
@@ -707,6 +705,7 @@ func (p *PollingService) notifyTemperatureSubscribers(events []TemperatureUpdate
 	for _, ch := range p.temperatureSubscribers {
 		select {
 		case ch <- events:
+			// Successfully sent
 		default:
 			// Channel full, skip
 		}

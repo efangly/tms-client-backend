@@ -46,7 +46,7 @@ func RequestFromTCPServer(config ServerConfig, command string, timeout time.Dura
 		Probes:    []ProbeData{},
 	}
 
-	address := fmt.Sprintf("%s:%d", config.IP, config.Port)
+	address := net.JoinHostPort(config.IP, fmt.Sprintf("%d", config.Port))
 
 	// Connect with timeout
 	conn, err := net.DialTimeout("tcp", address, timeout)
