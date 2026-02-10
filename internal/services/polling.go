@@ -363,13 +363,13 @@ func (p *PollingService) pollAndSave() {
 			insertTime := database.GetThailandTime().Truncate(time.Microsecond)
 
 			// Debug: Log the timestamp being used
-			log.Printf("  🕐 InsertTime for %s Probe %d: %v", machineName, probeData.ProbeNo, insertTime)
+			log.Printf("InsertTime for %s Probe %d: %v", machineName, probeData.ProbeNo, insertTime)
 
 			// Create temp log entry
 			tempLog := models.TempLog{
 				MachineIP:  ip,
 				ProbeNo:    probeData.ProbeNo,
-				McuID:      &probeData.McuID,
+				McuID:      &probeConfig.MachineName,
 				TempValue:  &adjustedTemp,
 				RealValue:  &realValueInt,
 				Status:     &tempStatus,
