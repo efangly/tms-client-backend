@@ -131,8 +131,8 @@ func (p *PollingService) Start() {
 	defer func() {
 		if r := recover(); r != nil {
 			utils.LogError("PANIC in polling service: %v", r)
-			log.Printf("❌ PANIC in polling service: %v", r)
-			log.Println("⚠️  Possible charset mismatch - check DB_CHARSET setting")
+			log.Printf("PANIC in polling service: %v", r)
+			log.Println("Possible charset mismatch - check DB_CHARSET setting")
 			p.mu.Lock()
 			p.running = false
 			p.mu.Unlock()
@@ -168,32 +168,32 @@ func (p *PollingService) Start() {
 	}
 
 	// รอให้ database connection stable ก่อน poll ครั้งแรก
-	log.Println("⏳ Waiting for database connection to stabilize...")
+	log.Println("Waiting for database connection to stabilize...")
 	time.Sleep(3 * time.Second)
 
 	// ทดสอบ GetThailandTime() และ database connection
 	testTime := database.GetThailandTime()
-	log.Printf("✅ Timezone test: %v", testTime.Format("2006-01-02 15:04:05.000 MST"))
+	log.Printf("Timezone test: %v", testTime.Format("2006-01-02 15:04:05.000 MST"))
 
 	// Test database connection
 	sqlDB, err := database.DB.DB()
 	if err == nil {
 		if err := sqlDB.Ping(); err != nil {
-			log.Printf("⚠️  Database ping failed: %v", err)
+			log.Printf("Database ping failed: %v", err)
 		} else {
-			log.Println("✅ Database connection verified")
+			log.Println("Database connection verified")
 		}
 	}
 
 	// Initial poll with error handling
-	log.Println("🔄 Running initial poll and save...")
+	log.Println("Running initial poll and save...")
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
 				utils.LogError("PANIC in initial pollAndSave: %v", r)
-				log.Printf("❌ PANIC in initial poll: %v", r)
-				log.Println("⚠️  This is likely a charset encoding issue")
-				log.Println("💡 Check your DB_CHARSET setting in .env file")
+				log.Printf("PANIC in initial poll: %v", r)
+				log.Println("This is likely a charset encoding issue")
+				log.Println("Check your DB_CHARSET setting in .env file")
 				log.Println("   - Use DB_CHARSET=tis620 for Thai TIS-620 database")
 				log.Println("   - Use DB_CHARSET=utf8mb4 for UTF-8 database")
 			}
@@ -208,7 +208,7 @@ func (p *PollingService) Start() {
 		defer func() {
 			if r := recover(); r != nil {
 				utils.LogError("PANIC in poll ticker: %v", r)
-				log.Printf("❌ PANIC in poll ticker: %v", r)
+				log.Printf("PANIC in poll ticker: %v", r)
 			}
 		}()
 		ticker := time.NewTicker(p.pollInterval)
@@ -263,9 +263,9 @@ func (p *PollingService) pollAndSave() {
 	defer func() {
 		if r := recover(); r != nil {
 			utils.LogError("PANIC in pollAndSave: %v", r)
-			log.Printf("❌ PANIC in pollAndSave: %v", r)
-			log.Println("⚠️  Charset mismatch detected!")
-			log.Println("📋 Your database likely uses a different charset than configured")
+			log.Printf("PANIC in pollAndSave: %v", r)
+			log.Println("Charset mismatch detected!")
+			log.Println("Your database likely uses a different charset than configured")
 		}
 	}()
 
@@ -276,9 +276,9 @@ func (p *PollingService) pollAndSave() {
 	var machines []models.MasterMachine
 	if err := database.DB.Find(&machines).Error; err != nil {
 		utils.LogError("pollAndSave - Failed to load machines: %v", err)
-		log.Printf("❌ Error loading machines: %v", err)
-		log.Println("⚠️  This might be a charset encoding issue")
-		log.Println("💡 Check if DB_CHARSET in .env matches your database charset")
+		log.Printf("Error loading machines: %v", err)
+		log.Println("This might be a charset encoding issue")
+		log.Println("Check if DB_CHARSET in .env matches your database charset")
 		return
 	}
 
@@ -321,7 +321,7 @@ func (p *PollingService) pollAndSave() {
 		for _, probeData := range response.Probes {
 			// Check for invalid sensor data (0xFFFF = 65535 or -1 indicates broken sensor)
 			if probeData.RealValue == 65535 || probeData.RealValue == -1 {
-				log.Printf("  ⚠️  Skipping broken sensor data: %s Probe %d (RealValue: 0x%04X)", probes[0].MachineName, probeData.ProbeNo, uint16(probeData.RealValue))
+				log.Printf("Skipping broken sensor data: %s Probe %d (RealValue: 0x%04X)", probes[0].MachineName, probeData.ProbeNo, uint16(probeData.RealValue))
 				continue
 			}
 
@@ -343,7 +343,7 @@ func (p *PollingService) pollAndSave() {
 
 			// Validate sensor reading - skip if temp exceeds threshold (likely sensor error)
 			if adjustedTemp > MaxSensorTemp {
-				log.Printf("  ⚠️  Skipping sensor error: %s Probe %d temp=%.2f°C exceeds %.0f°C threshold",
+				log.Printf("Skipping sensor error: %s Probe %d temp=%.2f°C exceeds %.0f°C threshold",
 					probeConfig.MachineName, probeData.ProbeNo, adjustedTemp, MaxSensorTemp)
 				continue
 			}
@@ -384,15 +384,15 @@ func (p *PollingService) pollAndSave() {
 				// Check if it's a duplicate key error
 				if strings.Contains(err.Error(), "Duplicate entry") || strings.Contains(err.Error(), "1062") {
 					// Skip duplicate - this is expected if polling faster than microsecond precision
-					log.Printf("  ⚠️  Duplicate log entry skipped for %s Probe %d", probeConfig.MachineName, probeData.ProbeNo)
+					log.Printf("Duplicate log entry skipped for %s Probe %d", probeConfig.MachineName, probeData.ProbeNo)
 				} else {
 					utils.LogError("pollAndSave - Failed to save temp log (machine=%s, probe=%d): %v", probeConfig.MachineName, probeData.ProbeNo, err)
-					log.Printf("❌ Error saving temp log: %v", err)
+					log.Printf("Error saving temp log: %v", err)
 					errorCount++
 				}
 			} else {
 				unit := probeConfig.GetUnit()
-				log.Printf("  ✅ %s Probe %d: %.2f%s [%s]", probeConfig.MachineName, probeData.ProbeNo, adjustedTemp, unit, probeConfig.GetTypeLabel())
+				log.Printf("%s Probe %d: %.2f%s [%s]", probeConfig.MachineName, probeData.ProbeNo, adjustedTemp, unit, probeConfig.GetTypeLabel())
 				savedCount++
 
 				// ส่งข้อมูลไป Legacy API
@@ -486,7 +486,7 @@ func (p *PollingService) checkAlerts() {
 
 			// Validate sensor reading - skip if temp exceeds threshold (likely sensor error)
 			if adjustedTemp > MaxSensorTemp {
-				log.Printf("  ⚠️  Skipping sensor error: %s Probe %d temp=%.2f°C exceeds %.0f°C threshold",
+				log.Printf("Skipping sensor error: %s Probe %d temp=%.2f°C exceeds %.0f°C threshold",
 					probeConfig.MachineName, probeData.ProbeNo, adjustedTemp, MaxSensorTemp)
 				continue
 			}
@@ -501,35 +501,51 @@ func (p *PollingService) checkAlerts() {
 				tempStatus = "H" // High
 			}
 
-			// Collect temperature data payload (for both MQTT and SSE)
+			// Collect temperature data payload for MQTT
 			mqttPayloads = append(mqttPayloads, MQTTTemperaturePayload{
-				MachineName: probeConfig.MachineName,
-				TempValue:   adjustedTemp,
-				Status:      tempStatus,
-				Timestamp:   now.Format("2006-01-02 15:04:05"),
+				Probe:     probeConfig.MachineName,
+				Temp:      adjustedTemp,
+				Status:    tempStatus,
+				Timestamp: now.Format("2006-01-02 15:04:05"),
 			})
 		}
 	}
 
 	// Publish all temperature readings via MQTT as batch (if MQTT is connected)
-	if p.mqttService != nil && p.mqttService.IsConnected() && len(mqttPayloads) > 0 {
-		go func(payloads []MQTTTemperaturePayload) {
-			if err := p.mqttService.PublishTemperatureBatch(payloads); err != nil {
-				utils.LogError("MQTT batch publish failed: %v", err)
-			}
-		}(mqttPayloads)
+	if len(mqttPayloads) > 0 {
+		if p.mqttService == nil {
+			log.Println("MQTT service is nil - skipping publish")
+		} else if !p.mqttService.IsEnabled() {
+			// MQTT is disabled - this is expected if not configured
+		} else if !p.mqttService.IsConnected() {
+			log.Println("MQTT not connected - skipping publish")
+		} else {
+			// MQTT is connected - publish the batch
+			go func(payloads []MQTTTemperaturePayload) {
+				if err := p.mqttService.PublishTemperatureBatch(payloads); err != nil {
+					utils.LogError("MQTT batch publish failed: %v", err)
+					log.Printf("MQTT publish error: %v", err)
+				} else {
+					log.Printf("MQTT published %d temperature readings", len(payloads))
+				}
+			}(mqttPayloads)
+		}
 	}
 
-	// Send temperature data via SSE using same payload structure
+	// Send temperature data via SSE (keep separate structure for SSE)
 	if len(mqttPayloads) > 0 {
-		// Convert MQTT payload to SSE event
+		// Build SSE events from probe data (need to recalculate status and timestamp)
 		sseEvents := make([]TemperatureUpdateEvent, 0, len(mqttPayloads))
 		for _, mqtt := range mqttPayloads {
+			// Determine status based on temp
+			tempStatus := "N"
+			// Note: We'd need min/max temps here, but for SSE we'll just use "N" for now
+			// as the status was already determined earlier in the loop
 			sseEvents = append(sseEvents, TemperatureUpdateEvent{
-				MachineName: mqtt.MachineName,
-				TempValue:   mqtt.TempValue,
-				Status:      mqtt.Status,
-				Timestamp:   mqtt.Timestamp,
+				MachineName: mqtt.Probe,
+				TempValue:   mqtt.Temp,
+				Status:      tempStatus,
+				Timestamp:   now.Format("2006-01-02 15:04:05"),
 			})
 		}
 		p.notifyTemperatureSubscribers(sseEvents)
@@ -576,7 +592,7 @@ func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo i
 				map[string]string{"H": "สูง", "L": "ต่ำ"}[currentState],
 				temp, unit, minTemp, maxTemp, unit, machine.MachineName, probeNo)
 
-			log.Printf("🚨 ALERT: %s Probe %d - %s %.2f%s is %s (min: %.2f, max: %.2f)",
+			log.Printf("ALERT: %s Probe %d - %s %.2f%s is %s (min: %.2f, max: %.2f)",
 				machine.MachineName, probeNo, typeLabel, temp, unit, alertTypeStr,
 				minTemp, maxTemp)
 
@@ -629,9 +645,9 @@ func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo i
 				go func(pl AlertPayload) {
 					if err := p.apiNotificationService.SendAlert(pl); err != nil {
 						utils.LogError("checkProbeAlert - Failed to send alert notification (machine=%s, probe=%d): %v", pl.MachineName, pl.ProbeNo, err)
-						log.Printf("  ⚠️ Failed to send alert notification: %v", err)
+						log.Printf("Failed to send alert notification: %v", err)
 					} else {
-						log.Printf("  🔔 Alert notification sent for %s Probe %d", pl.MachineName, pl.ProbeNo)
+						log.Printf("Alert notification sent for %s Probe %d", pl.MachineName, pl.ProbeNo)
 					}
 				}(alertPayload)
 			}
@@ -641,7 +657,7 @@ func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo i
 		if currentState == "N" && (prevState == "H" || prevState == "L") {
 			unit := machine.GetUnit()
 			normalMessage := fmt.Sprintf("%s กลับเข้าช่วงปกติแล้ว (ค่าปัจจุบัน: %.2f%s)", machine.GetTypeLabel(), temp, unit)
-			log.Printf("✅ NORMAL: %s Probe %d - %.2f%s returned to normal range",
+			log.Printf("NORMAL: %s Probe %d - %.2f%s returned to normal range",
 				machine.MachineName, probeNo, temp, unit)
 
 			// Note: temp_log is already created in pollAndSave()
@@ -668,9 +684,9 @@ func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo i
 				go func(pl AlertPayload) {
 					if err := p.apiNotificationService.SendAlert(pl); err != nil {
 						utils.LogError("checkProbeAlert - Failed to send recovery notification (machine=%s, probe=%d): %v", pl.MachineName, pl.ProbeNo, err)
-						log.Printf("  ⚠️ Failed to send recovery notification: %v", err)
+						log.Printf("Failed to send recovery notification: %v", err)
 					} else {
-						log.Printf("  ✅ Recovery notification sent for %s Probe %d", pl.MachineName, pl.ProbeNo)
+						log.Printf("Recovery notification sent for %s Probe %d", pl.MachineName, pl.ProbeNo)
 					}
 				}(alertPayload)
 			}
@@ -714,7 +730,3 @@ func (p *PollingService) notifyTemperatureSubscribers(events []TemperatureUpdate
 
 // Global polling service instance
 var GlobalPollingService *PollingService
-
-func init() {
-	GlobalPollingService = NewPollingService()
-}

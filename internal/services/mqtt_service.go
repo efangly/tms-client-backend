@@ -15,10 +15,10 @@ import (
 
 // MQTTTemperaturePayload represents the temperature data sent via MQTT
 type MQTTTemperaturePayload struct {
-	MachineName string  `json:"machineName"`
-	TempValue   float64 `json:"tempValue"`
-	Status      string  `json:"status"` // N=Normal, H=High, L=Low
-	Timestamp   string  `json:"timestamp"`
+	Probe     string  `json:"probe"`
+	Temp      float64 `json:"temp"`
+	Status    string  `json:"status"`
+	Timestamp string  `json:"timestamp"`
 }
 
 // MQTTService handles MQTT connection and publishing
@@ -76,7 +76,7 @@ func NewMQTTService() *MQTTService {
 // Connect establishes connection to the MQTT broker
 func (m *MQTTService) Connect() error {
 	if !m.enabled {
-		log.Println("📡 MQTT: DISABLED (MQTT_BROKER not configured)")
+		log.Println("MQTT: DISABLED (MQTT_BROKER not configured)")
 		return nil
 	}
 
@@ -98,11 +98,11 @@ func (m *MQTTService) Connect() error {
 
 	opts.SetConnectionLostHandler(func(client mqtt.Client, err error) {
 		utils.LogError("MQTT connection lost: %v", err)
-		log.Printf("⚠️  MQTT connection lost: %v", err)
+		log.Printf("MQTT connection lost: %v", err)
 	})
 
 	opts.SetOnConnectHandler(func(client mqtt.Client) {
-		log.Println("✅ MQTT reconnected to broker")
+		log.Println("MQTT reconnected to broker")
 	})
 
 	m.client = mqtt.NewClient(opts)
@@ -113,8 +113,8 @@ func (m *MQTTService) Connect() error {
 		return fmt.Errorf("MQTT connect failed: %v", token.Error())
 	}
 
-	log.Printf("✅ MQTT connected to %s:%s (clientID: %s)", m.broker, m.port, m.clientID)
-	log.Printf("   Topic: %s", m.topic)
+	log.Printf("MQTT connected to %s:%s (clientID: %s)", m.broker, m.port, m.clientID)
+	log.Printf("Topic: %s", m.topic)
 	return nil
 }
 
@@ -122,7 +122,7 @@ func (m *MQTTService) Connect() error {
 func (m *MQTTService) Disconnect() {
 	if m.client != nil && m.client.IsConnected() {
 		m.client.Disconnect(1000)
-		log.Println("📡 MQTT disconnected")
+		log.Println("MQTT disconnected")
 	}
 }
 
@@ -139,7 +139,11 @@ func (m *MQTTService) IsConnected() bool {
 // PublishTemperature publishes a single temperature reading to MQTT
 func (m *MQTTService) PublishTemperature(payload MQTTTemperaturePayload) error {
 	if !m.IsConnected() {
-		return fmt.Errorf("MQTT not connected")
+		// Try to reconnect if not connected
+		log.Println("MQTT not connected, attempting to reconnect...")
+		if err := m.Connect(); err != nil {
+			return fmt.Errorf("MQTT reconnect failed: %v", err)
+		}
 	}
 
 	data, err := json.Marshal(payload)
@@ -155,13 +159,18 @@ func (m *MQTTService) PublishTemperature(payload MQTTTemperaturePayload) error {
 		return fmt.Errorf("MQTT publish failed: %v", token.Error())
 	}
 
+	log.Printf("Published to MQTT: %s = %.2f", payload.Probe, payload.Temp)
 	return nil
 }
 
 // PublishTemperatureBatch publishes multiple temperature readings to MQTT
 func (m *MQTTService) PublishTemperatureBatch(payloads []MQTTTemperaturePayload) error {
 	if !m.IsConnected() {
-		return fmt.Errorf("MQTT not connected")
+		// Try to reconnect if not connected
+		log.Println("MQTT not connected, attempting to reconnect...")
+		if err := m.Connect(); err != nil {
+			return fmt.Errorf("MQTT reconnect failed: %v", err)
+		}
 	}
 
 	// Publish all readings as a single batch message
@@ -170,13 +179,13 @@ func (m *MQTTService) PublishTemperatureBatch(payloads []MQTTTemperaturePayload)
 		return fmt.Errorf("failed to marshal MQTT batch payload: %v", err)
 	}
 
-	topic := fmt.Sprintf("%s/batch", m.topic)
-	token := m.client.Publish(topic, 0, false, data)
+	token := m.client.Publish(m.topic, 0, false, data)
 	token.Wait()
 
 	if token.Error() != nil {
 		return fmt.Errorf("MQTT batch publish failed: %v", token.Error())
 	}
 
+	log.Printf("Published %d readings to MQTT topic: %s", len(payloads), m.topic)
 	return nil
 }

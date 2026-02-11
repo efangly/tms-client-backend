@@ -76,6 +76,10 @@ func main() {
 		defer services.GlobalMQTTService.Disconnect()
 	}
 
+	// Initialize Polling service (after MQTT is ready)
+	log.Println("🔄 Initializing polling service...")
+	services.GlobalPollingService = services.NewPollingService()
+
 	// Initialize Fiber app
 	app := fiber.New(fiber.Config{
 		AppName: "TMS Backend API",

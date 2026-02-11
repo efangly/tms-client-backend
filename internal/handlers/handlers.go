@@ -234,7 +234,7 @@ func GetTempLogReport(c *fiber.Ctx) error {
 	if devices != "" {
 		ips := splitComma(devices)
 		if len(ips) > 0 {
-			query = query.Where("machine_ip IN ?", ips)
+			query = query.Where("mcu_id IN ?", ips)
 		}
 	}
 
