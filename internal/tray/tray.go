@@ -39,7 +39,8 @@ func onReady(startServer func()) {
 	systray.AddSeparator()
 
 	mOpenBrowser := systray.AddMenuItem("Open Health Check", "Open browser to health check endpoint")
-	mOpenLogs := systray.AddMenuItem("Open Logs Folder", "Open the logs directory")
+	mConsole := systray.AddMenuItem("Show Console", "Show/hide the console log window")
+	mOpenLogs := systray.AddMenuItem("Open Error Logs", "Open the error logs directory")
 
 	systray.AddSeparator()
 
@@ -62,6 +63,14 @@ func onReady(startServer func()) {
 			select {
 			case <-mOpenBrowser.ClickedCh:
 				openURL(fmt.Sprintf("http://localhost:%s/health", serverPort))
+			case <-mConsole.ClickedCh:
+				if IsConsoleVisible() {
+					HideConsole()
+					mConsole.SetTitle("Show Console")
+				} else {
+					ShowConsole()
+					mConsole.SetTitle("Hide Console")
+				}
 			case <-mOpenLogs.ClickedCh:
 				openLogsFolder()
 			case <-mStartup.ClickedCh:
@@ -168,7 +177,8 @@ func AddToStartup() error {
 	}
 	defer k.Close()
 
-	if err := k.SetStringValue(appName, exePath); err != nil {
+	// Quote the path to handle directory names with spaces
+	if err := k.SetStringValue(appName, `"`+exePath+`"`); err != nil {
 		return fmt.Errorf("failed to set registry value: %w", err)
 	}
 

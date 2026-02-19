@@ -2,95 +2,90 @@ package utils
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
 var (
-	ErrorLogger *log.Logger
-	logFile     *os.File
+	ErrorLogger    *log.Logger
+	logFile        *os.File
+	loggerMu       sync.Mutex
+	currentLogDate string
 )
 
-// InitLogger initializes the logger to write to both console and file
+// InitLogger prepares the error logger.
+// The actual log file is created lazily on the first LogError call.
 func InitLogger() error {
-	// Recover from any panic during initialization
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("⚠️  Logger initialization panic recovered: %v", r)
-		}
-	}()
+	return nil
+}
 
-	// Create logs directory if it doesn't exist
+// ensureLogFile creates or rotates the error log file as needed.
+// Must be called with loggerMu held.
+func ensureLogFile() error {
+	today := time.Now().Format("2006-01-02")
+
+	// File already open for today
+	if logFile != nil && currentLogDate == today {
+		return nil
+	}
+
+	// Close old file if date changed
+	if logFile != nil {
+		logFile.Close()
+		logFile = nil
+		ErrorLogger = nil
+	}
+
 	logsDir := "logs"
 	if err := os.MkdirAll(logsDir, 0755); err != nil {
-		log.Printf("⚠️  Failed to create logs directory: %v", err)
 		return fmt.Errorf("failed to create logs directory: %v", err)
 	}
 
-	// Create log file with current date
-	now := time.Now()
-	filename := fmt.Sprintf("error_%s.txt", now.Format("2006-01-02"))
+	filename := fmt.Sprintf("error_%s.txt", today)
 	logPath := filepath.Join(logsDir, filename)
 
-	// Open or create log file (append mode)
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		log.Printf("⚠️  Failed to open log file: %v", err)
 		return fmt.Errorf("failed to open log file: %v", err)
 	}
 
 	logFile = file
-
-	// Create multi-writer to write to both file and stdout
-	multiWriter := io.MultiWriter(os.Stdout, file)
-
-	// Initialize error logger
-	ErrorLogger = log.New(multiWriter, "[ERROR] ", log.Ldate|log.Ltime|log.Lshortfile)
-
-	log.Printf("✅ Error logging initialized: %s", logPath)
-
+	currentLogDate = today
+	ErrorLogger = log.New(file, "[ERROR] ", log.Ldate|log.Ltime|log.Lshortfile)
 	return nil
 }
 
-// LogError logs an error message to both console and file
+// LogError logs an error to both console and the error log file.
+// The error log file is created lazily on the first call.
 func LogError(format string, v ...interface{}) {
-	// Recover from any panic
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[ERROR-PANIC] %v", r)
-		}
-	}()
+	// Always print to console
+	log.Printf("[ERROR] "+format, v...)
+
+	loggerMu.Lock()
+	defer loggerMu.Unlock()
+
+	if err := ensureLogFile(); err != nil {
+		log.Printf("Failed to create error log file: %v", err)
+		return
+	}
 
 	if ErrorLogger != nil {
 		ErrorLogger.Printf(format, v...)
-	} else {
-		// Fallback to standard logger if not initialized
-		log.Printf("[ERROR] "+format, v...)
 	}
 }
 
-// CloseLogger closes the log file
+// CloseLogger closes the error log file
 func CloseLogger() {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("⚠️  Error closing logger: %v", r)
-		}
-	}()
+	loggerMu.Lock()
+	defer loggerMu.Unlock()
 
 	if logFile != nil {
 		logFile.Close()
 		logFile = nil
 	}
 	ErrorLogger = nil
-}
-
-// RotateLogFile rotates the log file if date has changed
-func RotateLogFile() error {
-	if logFile != nil {
-		logFile.Close()
-	}
-	return InitLogger()
+	currentLogDate = ""
 }

@@ -1,11 +1,10 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -22,25 +21,20 @@ import (
 
 var fiberApp *fiber.App
 
-func waitForEnter() {
-	fmt.Println("\n🔴 Press Enter to exit...")
-	bufio.NewReader(os.Stdin).ReadBytes('\n')
-}
-
-// setupFileLogger redirects the standard log output to a file
-// when running in system tray mode (no console window).
-func setupFileLogger() (*os.File, error) {
-	logsDir := "logs"
-	os.MkdirAll(logsDir, 0755)
-
-	logFile, err := os.OpenFile("logs/tms-backend.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+// changeToExeDir changes the working directory to the executable's directory.
+// This is critical for Windows Startup, where the working directory defaults to C:\Windows\System32.
+func changeToExeDir() error {
+	exePath, err := os.Executable()
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to get executable path: %v", err)
 	}
-
-	// Redirect standard log to file
-	log.SetOutput(io.MultiWriter(logFile))
-	return logFile, nil
+	exePath, err = filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve symlinks: %v", err)
+	}
+	exeDir := filepath.Dir(exePath)
+	log.Printf("Working directory: %s", exeDir)
+	return os.Chdir(exeDir)
 }
 
 func startServer() {
@@ -191,25 +185,63 @@ func cleanup() {
 }
 
 func main() {
-	// Setup file-only logging for tray mode (no console)
-	logFile, err := setupFileLogger()
-	if err != nil {
-		// If we can't set up file logging, try to continue anyway
-		log.Printf("Warning: could not setup file logger: %v", err)
+	// --- STARTUP DIAGNOSTIC ---
+	// Write a debug file to diagnose startup issues
+	// This runs before anything else so we can tell if the program starts at all
+	diagLog := startupDiag("[1/5] main() started")
+
+	// Change working directory to exe location (critical for Windows Startup)
+	if err := changeToExeDir(); err != nil {
+		startupDiag(fmt.Sprintf("[ERROR] changeToExeDir failed: %v", err))
+		log.Printf("Warning: could not change to exe directory: %v", err)
+	} else {
+		startupDiag("[2/5] Working directory set OK")
 	}
-	if logFile != nil {
-		defer logFile.Close()
+
+	// Initialize hidden console for log output (visible via tray menu)
+	if err := tray.InitConsole(); err != nil {
+		startupDiag(fmt.Sprintf("[WARN] InitConsole failed: %v", err))
+		log.Printf("Warning: could not initialize console: %v", err)
+	} else {
+		startupDiag("[3/5] Console initialized OK")
 	}
 
 	// Get port for tray tooltip
 	if err := godotenv.Load(); err == nil {
-		// .env loaded successfully
+		startupDiag("[4/5] .env loaded OK")
+	} else {
+		startupDiag(fmt.Sprintf("[WARN] .env not found: %v", err))
 	}
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
+	startupDiag(fmt.Sprintf("[5/5] Starting tray on port %s", port))
+	if diagLog != nil {
+		diagLog.Close()
+	}
+
 	// Run as system tray application
 	tray.Run(port, startServer, cleanup)
+}
+
+// startupDiag writes a diagnostic message to startup_debug.log.
+// Used to debug issues when the program starts at Windows login.
+func startupDiag(msg string) *os.File {
+	// Try to write next to the exe first, then fallback to temp
+	paths := []string{"startup_debug.log"}
+	tmpFile := filepath.Join(os.TempDir(), "tms-backend-startup-debug.log")
+	paths = append(paths, tmpFile)
+
+	for _, p := range paths {
+		f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			continue
+		}
+		timestamp := time.Now().Format("2006-01-02 15:04:05")
+		fmt.Fprintf(f, "%s %s\n", timestamp, msg)
+		return f
+	}
+	return nil
 }

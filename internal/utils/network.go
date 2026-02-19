@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// WaitForNetwork waits for network connectivity before proceeding
-// Returns true if network is ready, false if timeout exceeded
+// WaitForNetwork waits for a network interface to be ready (has an IPv4 address).
+// Returns true if network is ready, false if timeout exceeded.
 func WaitForNetwork(timeout time.Duration) bool {
 	log.Println("Checking network connectivity...")
 	deadline := time.Now().Add(timeout)
@@ -16,16 +16,17 @@ func WaitForNetwork(timeout time.Duration) bool {
 	for time.Now().Before(deadline) {
 		attempt++
 
-		// Try to resolve a reliable DNS name
-		if _, err := net.LookupHost("google.com"); err == nil {
-			log.Printf("Network is ready (attempt %d)", attempt)
-			return true
-		}
-
-		// Also try alternative DNS
-		if _, err := net.LookupHost("cloudflare.com"); err == nil {
-			log.Printf("Network is ready (attempt %d)", attempt)
-			return true
+		// Check if any network interface has a non-loopback IPv4 address
+		addrs, err := net.InterfaceAddrs()
+		if err == nil {
+			for _, addr := range addrs {
+				if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+					if ipnet.IP.To4() != nil {
+						log.Printf("Network is ready (attempt %d, IP: %s)", attempt, ipnet.IP)
+						return true
+					}
+				}
+			}
 		}
 
 		log.Printf("Network not ready yet (attempt %d), retrying...", attempt)
