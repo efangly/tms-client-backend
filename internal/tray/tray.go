@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/getlantern/systray"
 	"golang.org/x/sys/windows/registry"
@@ -151,74 +152,99 @@ func openLogsFolder() {
 	}
 }
 
-// Windows Startup Management
-const startupRegistryPath = `Software\Microsoft\Windows\CurrentVersion\Run`
-const appName = "TMS-Backend"
+// Windows Startup Management via HKCU Registry Run key + VBScript launcher.
+//
+// Why VBScript wrapper instead of registering the exe directly?
+//   - The HKCU Run key fires very early in the Windows session, before many
+//     environment variables (TEMP, USERPROFILE, etc.) are fully initialised.
+//     A windowsgui exe launched at that moment often silently exits with no log.
+//   - wscript.exe runs the VBS in a fully-initialised user session, giving the
+//     real exe a stable environment and the correct working directory.
+//   - This is the same technique used by PM2-windows-startup and other tools.
+const runKeyPath = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+const taskName = "TMS-Backend"
 
-// AddToStartup adds the application to Windows startup registry
+// vbsLauncherName is placed next to the exe.
+const vbsLauncherName = "tms-backend-startup.vbs"
+
+// vbsTemplate launches the exe silently from its own directory.
+// CreateObject("WScript.Shell").Run wraps the launch so the working directory
+// is set correctly and wscript.exe returns immediately (intWindowStyle=0, bWaitOnReturn=false).
+const vbsTemplate = `Set oShell = CreateObject("WScript.Shell")
+oShell.CurrentDirectory = "%s"
+oShell.Run """%s""", 0, False
+`
+
+// AddToStartup writes a VBScript launcher next to the exe and registers it
+// in the HKCU Run key so Windows starts the app silently at logon.
 func AddToStartup() error {
 	if runtime.GOOS != "windows" {
-		return fmt.Errorf("startup registry is only supported on Windows")
+		return fmt.Errorf("only supported on Windows")
 	}
 
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
-
 	exePath, err = filepath.Abs(exePath)
 	if err != nil {
 		return fmt.Errorf("failed to get absolute path: %w", err)
 	}
+	exeDir := filepath.Dir(exePath)
+	vbsPath := filepath.Join(exeDir, vbsLauncherName)
 
-	k, err := registry.OpenKey(registry.CURRENT_USER, startupRegistryPath, registry.SET_VALUE)
+	// Write the VBScript launcher
+	vbsContent := fmt.Sprintf(vbsTemplate, exeDir, exePath)
+	if err := os.WriteFile(vbsPath, []byte(vbsContent), 0644); err != nil {
+		return fmt.Errorf("failed to write VBS launcher: %w", err)
+	}
+
+	// Use the registry package to write the correct value with embedded quotes.
+	// reg.exe cannot reliably store `wscript.exe "path"` (embedded quotes get dropped).
+	k, err := registry.OpenKey(registry.CURRENT_USER, strings.TrimPrefix(runKeyPath, `HKCU\`), registry.SET_VALUE)
 	if err != nil {
 		return fmt.Errorf("failed to open registry key: %w", err)
 	}
 	defer k.Close()
 
-	// Quote the path to handle directory names with spaces
-	if err := k.SetStringValue(appName, `"`+exePath+`"`); err != nil {
+	value := `wscript.exe "` + vbsPath + `"`
+	if err := k.SetStringValue(taskName, value); err != nil {
 		return fmt.Errorf("failed to set registry value: %w", err)
 	}
 
+	log.Printf("Startup registered via VBS: %s", value)
 	return nil
 }
 
-// RemoveFromStartup removes the application from Windows startup registry
+// RemoveFromStartup removes the Run key entry and the VBScript launcher.
 func RemoveFromStartup() error {
 	if runtime.GOOS != "windows" {
-		return fmt.Errorf("startup registry is only supported on Windows")
+		return fmt.Errorf("only supported on Windows")
 	}
 
-	k, err := registry.OpenKey(registry.CURRENT_USER, startupRegistryPath, registry.SET_VALUE)
+	cmd := exec.Command("reg", "delete", runKeyPath, "/v", taskName, "/f")
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to open registry key: %w", err)
-	}
-	defer k.Close()
-
-	if err := k.DeleteValue(appName); err != nil {
-		// If the value doesn't exist, it's not an error
-		if err != registry.ErrNotExist {
-			return fmt.Errorf("failed to delete registry value: %w", err)
+		if !strings.Contains(string(out), "unable to find") && !strings.Contains(string(out), "does not exist") {
+			return fmt.Errorf("reg delete failed: %v\nOutput: %s", err, string(out))
 		}
 	}
 
+	// Also clean up the VBS file
+	exePath, _ := os.Executable()
+	exePath, _ = filepath.Abs(exePath)
+	vbsPath := filepath.Join(filepath.Dir(exePath), vbsLauncherName)
+	os.Remove(vbsPath) // best-effort
+
+	log.Println("Startup removed")
 	return nil
 }
 
-// IsInStartup checks if the application is in Windows startup
+// IsInStartup reports whether the HKCU Run entry exists.
 func IsInStartup() bool {
 	if runtime.GOOS != "windows" {
 		return false
 	}
-
-	k, err := registry.OpenKey(registry.CURRENT_USER, startupRegistryPath, registry.QUERY_VALUE)
-	if err != nil {
-		return false
-	}
-	defer k.Close()
-
-	_, _, err = k.GetStringValue(appName)
-	return err == nil
+	cmd := exec.Command("reg", "query", runKeyPath, "/v", taskName)
+	return cmd.Run() == nil
 }

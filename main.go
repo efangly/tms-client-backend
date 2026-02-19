@@ -188,7 +188,7 @@ func main() {
 	// --- STARTUP DIAGNOSTIC ---
 	// Write a debug file to diagnose startup issues
 	// This runs before anything else so we can tell if the program starts at all
-	diagLog := startupDiag("[1/5] main() started")
+	startupDiag("[1/5] main() started")
 
 	// Change working directory to exe location (critical for Windows Startup)
 	if err := changeToExeDir(); err != nil {
@@ -218,30 +218,35 @@ func main() {
 	}
 
 	startupDiag(fmt.Sprintf("[5/5] Starting tray on port %s", port))
-	if diagLog != nil {
-		diagLog.Close()
-	}
 
 	// Run as system tray application
 	tray.Run(port, startServer, cleanup)
 }
 
-// startupDiag writes a diagnostic message to startup_debug.log.
-// Used to debug issues when the program starts at Windows login.
-func startupDiag(msg string) *os.File {
-	// Try to write next to the exe first, then fallback to temp
-	paths := []string{"startup_debug.log"}
-	tmpFile := filepath.Join(os.TempDir(), "tms-backend-startup-debug.log")
-	paths = append(paths, tmpFile)
+// startupDiag appends a diagnostic message to startup_debug.log.
+// Writes to %TEMP% first (absolute, always writable) then also next to the exe.
+// Used to debug startup issues; safe to leave in production builds.
+func startupDiag(msg string) {
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	line := timestamp + " " + msg + "\n"
 
-	for _, p := range paths {
-		f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-		if err != nil {
-			continue
-		}
-		timestamp := time.Now().Format("2006-01-02 15:04:05")
-		fmt.Fprintf(f, "%s %s\n", timestamp, msg)
-		return f
+	// Always write to %TEMP% first — guaranteed writable even from C:\Windows\System32
+	tmpDir := os.Getenv("TEMP")
+	if tmpDir == "" {
+		tmpDir = os.Getenv("TMP")
 	}
-	return nil
+	if tmpDir == "" {
+		tmpDir = `C:\Windows\Temp`
+	}
+	tmpLog := filepath.Join(tmpDir, "tms-backend-startup.log")
+	if f, err := os.OpenFile(tmpLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+		f.WriteString(line)
+		f.Close()
+	}
+
+	// Also write next to the exe (may fail before changeToExeDir, that's OK)
+	if f, err := os.OpenFile("startup_debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+		f.WriteString(line)
+		f.Close()
+	}
 }
