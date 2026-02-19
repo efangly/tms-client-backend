@@ -3,99 +3,131 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"os"
-	"os/signal"
-	"syscall"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/logger"
+	fiberlogger "github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/joho/godotenv"
 
 	"tms-backend/internal/database"
 	"tms-backend/internal/handlers"
 	"tms-backend/internal/services"
+	"tms-backend/internal/tray"
 	"tms-backend/internal/utils"
 )
+
+var fiberApp *fiber.App
 
 func waitForEnter() {
 	fmt.Println("\n🔴 Press Enter to exit...")
 	bufio.NewReader(os.Stdin).ReadBytes('\n')
 }
 
-func main() {
+// setupFileLogger redirects the standard log output to a file
+// when running in system tray mode (no console window).
+func setupFileLogger() (*os.File, error) {
+	logsDir := "logs"
+	os.MkdirAll(logsDir, 0755)
+
+	logFile, err := os.OpenFile("logs/tms-backend.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	// Redirect standard log to file
+	log.SetOutput(io.MultiWriter(logFile))
+	return logFile, nil
+}
+
+func startServer() {
 	// Recover from any panic
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("\n❌ PANIC: %v", r)
-			log.Println("\n📋 Stack trace:")
-			log.Printf("%v", r)
-			waitForEnter()
-			os.Exit(1)
+			log.Printf("PANIC: %v", r)
+			tray.SetError(fmt.Sprintf("PANIC: %v", r))
 		}
 	}()
 
 	// Load .env file
 	if err := godotenv.Load(); err != nil {
-		log.Println("⚠️  No .env file found, using environment variables")
-		log.Println("💡 Make sure .env file exists in the same folder as the executable")
+		log.Println("No .env file found, using environment variables")
 	}
 
 	// Initialize error logger
 	if err := utils.InitLogger(); err != nil {
-		log.Printf("⚠️  Failed to initialize error logger: %v", err)
-		log.Println("Continuing without file logging...")
+		log.Printf("Failed to initialize error logger: %v", err)
 	}
-	defer utils.CloseLogger()
 
-	// Initialize database
-	log.Println("🔌 Connecting to database...")
-	if err := database.Connect(); err != nil {
-		utils.LogError("Failed to connect to database: %v", err)
-		log.Printf("❌ Failed to connect to database: %v", err)
-		log.Println("\n📋 Please check:")
-		log.Println("   1. .env file exists and has correct database credentials")
-		log.Println("   2. Database server is accessible (check DB_HOST, DB_PORT)")
-		log.Println("   3. Username and password are correct (DB_USER, DB_PASSWORD)")
-		log.Println("   4. Database exists (DB_NAME)")
-		waitForEnter()
-		os.Exit(1)
+	// Wait for network to be ready (important for startup)
+	log.Println("Waiting for network connectivity...")
+	if !utils.WaitForNetwork(60 * time.Second) {
+		utils.LogError("Network not ready after timeout")
+		log.Println("WARNING: Network may not be ready, but continuing anyway...")
 	}
-	log.Println("✅ Database connected successfully")
 
-	// Initialize MQTT service
-	log.Println("📡 Initializing MQTT service...")
+	// Initialize database with retry
+	log.Println("Connecting to database...")
+	err := utils.RetryWithBackoff(
+		"Database connection",
+		func() error {
+			return database.Connect()
+		},
+		5,              // max attempts
+		2*time.Second,  // initial delay
+		30*time.Second, // max delay
+	)
+	if err != nil {
+		utils.LogError("Failed to connect to database after retries: %v", err)
+		log.Printf("Failed to connect to database: %v", err)
+		tray.SetError("Database connection failed")
+		return
+	}
+	log.Println("Database connected successfully")
+
+	// Initialize MQTT service with retry
+	log.Println("Initializing MQTT service...")
 	services.GlobalMQTTService = services.NewMQTTService()
 	if services.GlobalMQTTService.IsEnabled() {
-		if err := services.GlobalMQTTService.Connect(); err != nil {
-			utils.LogError("Failed to connect to MQTT broker: %v", err)
-			log.Printf("⚠️  MQTT connection failed: %v", err)
-			log.Println("   Continuing without MQTT...")
+		err := utils.RetryWithBackoff(
+			"MQTT connection",
+			func() error {
+				return services.GlobalMQTTService.Connect()
+			},
+			5,              // max attempts
+			2*time.Second,  // initial delay
+			30*time.Second, // max delay
+		)
+		if err != nil {
+			utils.LogError("Failed to connect to MQTT broker after retries: %v", err)
+			log.Printf("MQTT connection failed after retries: %v (continuing without MQTT)", err)
 		}
-		defer services.GlobalMQTTService.Disconnect()
 	}
 
 	// Initialize Polling service (after MQTT is ready)
-	log.Println("🔄 Initializing polling service...")
+	log.Println("Initializing polling service...")
 	services.GlobalPollingService = services.NewPollingService()
 
 	// Initialize Fiber app
-	app := fiber.New(fiber.Config{
-		AppName: "TMS Backend API",
+	fiberApp = fiber.New(fiber.Config{
+		AppName:               "TMS Backend API",
+		DisableStartupMessage: true,
 	})
 
 	// Middleware
-	app.Use(logger.New())
-	app.Use(cors.New())
+	fiberApp.Use(fiberlogger.New())
+	fiberApp.Use(cors.New())
 
 	// Health check
-	app.Get("/health", func(c *fiber.Ctx) error {
+	fiberApp.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
 
 	// API routes
-	api := app.Group("/api")
+	api := fiberApp.Group("/api")
 
 	// Device routes
 	api.Get("/devices", handlers.GetDevices)
@@ -122,19 +154,8 @@ func main() {
 	api.Get("/temperature-stream", handlers.TemperatureStream)
 
 	// Start polling service
-	log.Println("🔄 Starting polling service...")
+	log.Println("Starting polling service...")
 	go services.GlobalPollingService.Start()
-
-	// Graceful shutdown
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-c
-		log.Println("Shutting down gracefully...")
-		services.GlobalPollingService.Stop()
-		app.Shutdown()
-		os.Exit(0)
-	}()
 
 	// Start server
 	port := os.Getenv("PORT")
@@ -143,20 +164,52 @@ func main() {
 	}
 
 	log.Println("========================================")
-	log.Printf("🚀 Starting TMS Backend Server on port %s", port)
+	log.Printf("Starting TMS Backend Server on port %s", port)
 	log.Println("========================================")
-	log.Println("✨ Server is ready!")
-	log.Println("📝 Press Ctrl+C or close this window to stop the server")
-	log.Println("")
 
-	if err := app.Listen(":" + port); err != nil {
+	tray.SetRunning()
+
+	if err := fiberApp.Listen(":" + port); err != nil {
 		utils.LogError("Failed to start server: %v", err)
-		log.Printf("❌ Failed to start server: %v", err)
-		log.Println("\n📋 Possible reasons:")
-		log.Printf("   1. Port %s is already in use by another application\n", port)
-		log.Println("   2. Insufficient permissions to bind to the port")
-		log.Println("💡 Try changing the PORT in .env file to a different number (e.g., 8081)")
-		waitForEnter()
-		os.Exit(1)
+		log.Printf("Failed to start server: %v", err)
+		tray.SetError(fmt.Sprintf("Port %s in use", port))
 	}
+}
+
+func cleanup() {
+	log.Println("Shutting down gracefully...")
+	if services.GlobalPollingService != nil {
+		services.GlobalPollingService.Stop()
+	}
+	if services.GlobalMQTTService != nil {
+		services.GlobalMQTTService.Disconnect()
+	}
+	if fiberApp != nil {
+		fiberApp.Shutdown()
+	}
+	utils.CloseLogger()
+}
+
+func main() {
+	// Setup file-only logging for tray mode (no console)
+	logFile, err := setupFileLogger()
+	if err != nil {
+		// If we can't set up file logging, try to continue anyway
+		log.Printf("Warning: could not setup file logger: %v", err)
+	}
+	if logFile != nil {
+		defer logFile.Close()
+	}
+
+	// Get port for tray tooltip
+	if err := godotenv.Load(); err == nil {
+		// .env loaded successfully
+	}
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	// Run as system tray application
+	tray.Run(port, startServer, cleanup)
 }
