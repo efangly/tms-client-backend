@@ -145,6 +145,8 @@ func (p *PollingService) Start() {
 		return
 	}
 	p.running = true
+	// Recreate stopChan so Start() works correctly after a previous Stop()
+	p.stopChan = make(chan struct{})
 	p.mu.Unlock()
 
 	log.Println("Starting background polling service...")
@@ -205,19 +207,22 @@ func (p *PollingService) Start() {
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				utils.LogError("PANIC in poll ticker: %v", r)
-				log.Printf("PANIC in poll ticker: %v", r)
-			}
-		}()
 		ticker := time.NewTicker(p.pollInterval)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ticker.C:
-				p.pollAndSave()
+				// Recover per-iteration so the loop survives panics
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							utils.LogError("PANIC in poll ticker iteration: %v", r)
+							log.Printf("PANIC in poll ticker iteration: %v (will retry next tick)", r)
+						}
+					}()
+					p.pollAndSave()
+				}()
 			case <-p.stopChan:
 				return
 			}
@@ -234,7 +239,16 @@ func (p *PollingService) Start() {
 		for {
 			select {
 			case <-ticker.C:
-				p.checkAlerts()
+				// Recover per-iteration so the loop survives panics
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							utils.LogError("PANIC in alert checker iteration: %v", r)
+							log.Printf("PANIC in alert checker iteration: %v (will retry next tick)", r)
+						}
+					}()
+					p.checkAlerts()
+				}()
 			case <-p.stopChan:
 				return
 			}
@@ -250,11 +264,26 @@ func (p *PollingService) Stop() {
 		return
 	}
 	p.running = false
+	// Capture stopChan INSIDE the lock so a concurrent Start() cannot replace
+	// p.stopChan between the Unlock() and the close() call (race condition fix).
+	stopChan := p.stopChan
 	p.mu.Unlock()
 
-	close(p.stopChan)
-	p.wg.Wait()
-	log.Println("Polling service stopped")
+	close(stopChan)
+
+	// Wait with timeout to avoid blocking forever when goroutines are stuck on TCP calls
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Println("Polling service stopped gracefully")
+	case <-time.After(10 * time.Second):
+		log.Println("Polling service stop timed out after 10s, forcing shutdown")
+	}
 }
 
 // pollAndSave polls all devices and saves data
@@ -271,6 +300,14 @@ func (p *PollingService) pollAndSave() {
 
 	startTime := time.Now()
 	log.Println("=== Starting Poll & Save cycle ===")
+
+	// Verify database connection is alive before querying
+	if sqlDB, err := database.DB.DB(); err == nil {
+		if err := sqlDB.Ping(); err != nil {
+			log.Printf("Database ping failed in pollAndSave: %v, will retry next cycle", err)
+			return
+		}
+	}
 
 	// Get all machines grouped by IP
 	var machines []models.MasterMachine
@@ -432,9 +469,18 @@ func (p *PollingService) pollAndSave() {
 
 // checkAlerts checks for temperature alerts on current readings
 func (p *PollingService) checkAlerts() {
+	// Verify database connection is alive before querying
+	if sqlDB, err := database.DB.DB(); err == nil {
+		if err := sqlDB.Ping(); err != nil {
+			log.Printf("Database ping failed in checkAlerts: %v", err)
+			return
+		}
+	}
+
 	// Get all machines grouped by IP
 	var machines []models.MasterMachine
 	if err := database.DB.Find(&machines).Error; err != nil {
+		log.Printf("checkAlerts - Failed to load machines: %v", err)
 		return
 	}
 

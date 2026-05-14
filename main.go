@@ -172,6 +172,15 @@ func startServer() {
 
 func cleanup() {
 	log.Println("Shutting down gracefully...")
+
+	// Force exit after timeout to prevent the process from hanging indefinitely
+	// This is critical when running as Windows Startup - allows exe file to be updated
+	go func() {
+		time.Sleep(15 * time.Second)
+		log.Println("Cleanup timed out after 15s, forcing exit")
+		os.Exit(0)
+	}()
+
 	if services.GlobalPollingService != nil {
 		services.GlobalPollingService.Stop()
 	}
@@ -179,9 +188,17 @@ func cleanup() {
 		services.GlobalMQTTService.Disconnect()
 	}
 	if fiberApp != nil {
-		fiberApp.Shutdown()
+		// ShutdownWithTimeout ensures SSE/long-poll connections are forced closed
+		// so this call returns within ~5 s even when clients are still connected.
+		if err := fiberApp.ShutdownWithTimeout(5 * time.Second); err != nil {
+			log.Printf("Server shutdown timed out: %v", err)
+		}
 	}
 	utils.CloseLogger()
+	log.Println("Cleanup completed")
+	// Ensure the process always exits after cleanup, regardless of whether
+	// systray's message loop returns cleanly.
+	os.Exit(0)
 }
 
 func main() {

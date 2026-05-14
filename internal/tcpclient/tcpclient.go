@@ -119,12 +119,12 @@ func parseHexResponse(data []byte, ip string) []ProbeData {
 	}
 
 	// Verify header: 41 41 5a
-	if data[0] != 0x41 || data[1] != 0x41 || data[2] != 0x5a {
-		log.Printf("❌ Invalid header, expected 41 41 5A, got %02X %02X %02X", data[0], data[1], data[2])
+	if data[0] != 0x41 || data[1] != 0x41 {
+		log.Printf("❌ Invalid header, expected 41 41 got %02X %02X", data[0], data[1])
 		return probes
 	}
 
-	log.Printf("✅ Valid header: 41 41 5A")
+	log.Printf("✅ Valid header: 41 41")
 
 	// Check probe indicator at index 3
 	probeIndicator := data[3]

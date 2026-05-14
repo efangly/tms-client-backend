@@ -104,6 +104,9 @@ func Connect() error {
 	sqlDB.SetMaxIdleConns(10)
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetConnMaxLifetime(time.Hour)
+	// Expire idle connections after 5 minutes so the driver discards them
+	// before MySQL's wait_timeout closes them, preventing 'invalid connection' errors.
+	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
 
 	log.Println("Database connected successfully")
 	return nil
