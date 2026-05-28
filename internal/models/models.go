@@ -98,7 +98,7 @@ func (m *MasterMachine) GetUnit() string {
 type TempLog struct {
 	MachineIP  string     `gorm:"column:machine_ip;size:15;primaryKey" json:"machineIp"`
 	ProbeNo    int        `gorm:"column:probe_no;primaryKey;default:1" json:"probeNo"`
-	McuID      *string    `gorm:"column:mcu_id;size:2" json:"mcuId"`
+	McuID      *string    `gorm:"column:mcu_id;size:50" json:"mcuId"`
 	TempValue  *float64   `gorm:"column:temp_value" json:"tempValue"`
 	RealValue  *int       `gorm:"column:real_value" json:"realValue"`
 	Status     *string    `gorm:"column:status;size:8" json:"status"`

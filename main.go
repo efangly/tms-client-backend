@@ -46,11 +46,7 @@ func startServer() {
 		}
 	}()
 
-	// Load .env file
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using environment variables")
-	}
-
+	// .env is already loaded in main() before startServer is called.
 	// Initialize error logger
 	if err := utils.InitLogger(); err != nil {
 		log.Printf("Failed to initialize error logger: %v", err)
@@ -115,9 +111,18 @@ func startServer() {
 	fiberApp.Use(fiberlogger.New())
 	fiberApp.Use(cors.New())
 
-	// Health check
+	// Health check — includes dependency status
 	fiberApp.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"status": "ok"})
+		dbOK := false
+		if sqlDB, err := database.DB.DB(); err == nil {
+			dbOK = sqlDB.Ping() == nil
+		}
+		mqttOK := services.GlobalMQTTService != nil && services.GlobalMQTTService.IsConnected()
+		status, code := "ok", 200
+		if !dbOK {
+			status, code = "degraded", 503
+		}
+		return c.Status(code).JSON(fiber.Map{"status": status, "db": dbOK, "mqtt": mqttOK})
 	})
 
 	// API routes
@@ -141,8 +146,8 @@ func startServer() {
 	// Temperature errors
 	api.Get("/temp-errors", handlers.GetTempErrors)
 
-	// Polling control
-	api.Get("/poll", handlers.TriggerPoll)
+	// Polling control (POST — triggers a state change)
+	api.Post("/poll", handlers.TriggerPoll)
 
 	// SSE for real-time updates
 	api.Get("/temperature-stream", handlers.TemperatureStream)
