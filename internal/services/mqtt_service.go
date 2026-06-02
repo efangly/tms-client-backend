@@ -15,10 +15,11 @@ import (
 
 // MQTTTemperaturePayload represents the temperature data sent via MQTT
 type MQTTTemperaturePayload struct {
-	Probe     string  `json:"probe"`
-	Temp      float64 `json:"temp"`
-	Status    string  `json:"status"`
-	Timestamp string  `json:"timestamp"`
+	Probe       string  `json:"probe"`
+	Temp        float64 `json:"temp"`
+	Status      string  `json:"status"`
+	MachineType string  `json:"machinetype"`
+	Timestamp   string  `json:"timestamp"`
 }
 
 // MQTTService handles MQTT connection and publishing

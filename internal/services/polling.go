@@ -37,6 +37,7 @@ type TemperatureUpdateEvent struct {
 	MachineName string  `json:"machineName"`
 	TempValue   float64 `json:"tempValue"`
 	Status      string  `json:"status"`
+	MachineType string  `json:"type"`
 	Timestamp   string  `json:"timestamp"`
 }
 
@@ -265,23 +266,32 @@ func (p *PollingService) TriggerOnce() {
 }
 
 // getMachines returns machines from a 1-minute cache, falling back to a fresh DB query.
-// On DB error it returns stale cached data if available rather than failing the caller.
+// The lock is NOT held during the DB query so that pollAndSave() cache updates are
+// never blocked by a slow query inside checkAlerts().
 func (p *PollingService) getMachines() ([]models.MasterMachine, error) {
 	p.machineCacheMu.Lock()
-	defer p.machineCacheMu.Unlock()
 	if time.Since(p.machineCacheTime) < time.Minute && len(p.machineCache) > 0 {
-		return p.machineCache, nil
+		result := p.machineCache
+		p.machineCacheMu.Unlock()
+		return result, nil
 	}
+	stale := p.machineCache // keep reference in case DB fails
+	p.machineCacheMu.Unlock()
+
+	// DB query happens outside the lock.
 	var machines []models.MasterMachine
 	if err := database.DB.Find(&machines).Error; err != nil {
-		if len(p.machineCache) > 0 {
+		if len(stale) > 0 {
 			log.Printf("getMachines - DB error, serving stale cache: %v", err)
-			return p.machineCache, nil
+			return stale, nil
 		}
 		return nil, err
 	}
+
+	p.machineCacheMu.Lock()
 	p.machineCache = machines
 	p.machineCacheTime = time.Now()
+	p.machineCacheMu.Unlock()
 	return machines, nil
 }
 
@@ -313,12 +323,6 @@ func (p *PollingService) pollAndSave() {
 		log.Println("Check if DB_CHARSET in .env matches your database charset")
 		return
 	}
-
-	// Keep the cache warm with the fresh data we just fetched.
-	p.machineCacheMu.Lock()
-	p.machineCache = machines
-	p.machineCacheTime = time.Now()
-	p.machineCacheMu.Unlock()
 
 	machinesByIP := make(map[string][]models.MasterMachine)
 	for _, m := range machines {
@@ -430,6 +434,13 @@ func (p *PollingService) pollAndSave() {
 		}
 	}
 
+	// Warm the cache with the freshly-polled machine list so that checkAlerts()
+	// can skip its own DB query until the next minute.
+	p.machineCacheMu.Lock()
+	p.machineCache = machines
+	p.machineCacheTime = time.Now()
+	p.machineCacheMu.Unlock()
+
 	elapsed := time.Since(startTime)
 	log.Printf("=== Poll & Save completed in %v ===", elapsed)
 	log.Printf("   Saved: %d logs, %d errors", savedCount, errorCount)
@@ -530,7 +541,6 @@ func (p *PollingService) checkAlerts() {
 			}
 		}(mqttPayloads)
 	}
-
 	// Build SSE events — use the status already computed above, not a hardcoded "N".
 	sseEvents := make([]TemperatureUpdateEvent, 0, len(mqttPayloads))
 	for _, payload := range mqttPayloads {
@@ -538,7 +548,8 @@ func (p *PollingService) checkAlerts() {
 			MachineName: payload.Probe,
 			TempValue:   payload.Temp,
 			Status:      payload.Status,
-			Timestamp:   payload.Timestamp,
+			// MachineType: mqttPayloads[0].,
+			Timestamp: payload.Timestamp,
 		})
 	}
 	p.notifyTemperatureSubscribers(sseEvents)
