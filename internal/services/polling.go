@@ -513,10 +513,11 @@ func (p *PollingService) checkAlerts() {
 			}
 
 			mqttPayloads = append(mqttPayloads, MQTTTemperaturePayload{
-				Probe:     probeConfig.MachineName,
-				Temp:      adjustedTemp,
-				Status:    tempStatus,
-				Timestamp: now.Format("2006-01-02 15:04:05"),
+				Probe:       probeConfig.MachineName,
+				Temp:        adjustedTemp,
+				Status:      tempStatus,
+				MachineType: probeConfig.SType,
+				Timestamp:   now.Format("2006-01-02 15:04:05"),
 			})
 		}
 	}
@@ -548,8 +549,8 @@ func (p *PollingService) checkAlerts() {
 			MachineName: payload.Probe,
 			TempValue:   payload.Temp,
 			Status:      payload.Status,
-			// MachineType: mqttPayloads[0].,
-			Timestamp: payload.Timestamp,
+			MachineType: payload.MachineType,
+			Timestamp:   payload.Timestamp,
 		})
 	}
 	p.notifyTemperatureSubscribers(sseEvents)

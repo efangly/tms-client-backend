@@ -1,0 +1,413 @@
+{
+  "info": {
+    "name": "TMS Backend API",
+    "_postman_id": "tms-backend-api-v1",
+    "description": "Temperature Monitoring System — REST API for device management, temperature logs, alerts, and real-time streaming.\n\nBase URL: `http://{{host}}:{{port}}`\n\nSet the `host` and `port` collection variables before use (defaults: `localhost` and `8080`).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "host", "value": "localhost", "type": "string" },
+    { "key": "port", "value": "8080", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://{{host}}:{{port}}/health",
+              "protocol": "http",
+              "host": ["{{host}}"],
+              "port": "{{port}}",
+              "path": ["health"]
+            },
+            "description": "Returns server health including database and MQTT connectivity status.\n\nResponse:\n- `status`: `\"ok\"` (200) or `\"degraded\"` (503)\n- `db`: boolean — database ping result\n- `mqtt`: boolean — MQTT broker connection"
+          },
+          "response": [
+            {
+              "name": "OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"status\":\"ok\",\"db\":true,\"mqtt\":false}"
+            },
+            {
+              "name": "Degraded (DB down)",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\"status\":\"degraded\",\"db\":false,\"mqtt\":false}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Devices",
+      "description": "CRUD operations for temperature sensor devices (master_machine table). Each device is identified by a composite key of `machineIp` + `probeNo`.",
+      "item": [
+        {
+          "name": "List All Devices",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://{{host}}:{{port}}/api/devices",
+              "protocol": "http",
+              "host": ["{{host}}"],
+              "port": "{{port}}",
+              "path": ["api", "devices"]
+            },
+            "description": "Returns all configured sensor devices from the `master_machine` table."
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "[\n  {\n    \"machineIp\": \"192.168.1.10\",\n    \"probeNo\": 1,\n    \"probeAll\": 4,\n    \"machineName\": \"Server Room A\",\n    \"color\": \"FF5733\",\n    \"chkOnline\": \"1\",\n    \"chkSms\": \"0\",\n    \"chkMail\": \"1\",\n    \"chkMon\": \"0\",\n    \"chkLine\": \"0\",\n    \"chkReport\": \"1\",\n    \"minTemp\": 18.0,\n    \"maxTemp\": 28.0,\n    \"adjTemp\": 0.0,\n    \"sType\": \"t\",\n    \"port\": 0\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Get Device",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://{{host}}:{{port}}/api/devices/192.168.1.10?probeNo=1",
+              "protocol": "http",
+              "host": ["{{host}}"],
+              "port": "{{port}}",
+              "path": ["api", "devices", "192.168.1.10"],
+              "query": [
+                { "key": "probeNo", "value": "1", "description": "Probe number (default: 1)" }
+              ]
+            },
+            "description": "Returns a single device by IP address and probe number.\n\n**Path param:** `id` — machine IP address  \n**Query param:** `probeNo` — probe number (default 1)"
+          },
+          "response": [
+            {
+              "name": "Found",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"machineIp\": \"192.168.1.10\",\n  \"probeNo\": 1,\n  \"probeAll\": 4,\n  \"machineName\": \"Server Room A\",\n  \"color\": \"FF5733\",\n  \"chkOnline\": \"1\",\n  \"chkSms\": \"0\",\n  \"chkMail\": \"1\",\n  \"chkMon\": \"0\",\n  \"chkLine\": \"0\",\n  \"chkReport\": \"1\",\n  \"minTemp\": 18.0,\n  \"maxTemp\": 28.0,\n  \"adjTemp\": 0.0,\n  \"sType\": \"t\",\n  \"port\": 0\n}"
+            },
+            {
+              "name": "Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\"error\":\"Machine not found\"}"
+            }
+          ]
+        },
+        {
+          "name": "Create Device",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "http://{{host}}:{{port}}/api/devices",
+              "protocol": "http",
+              "host": ["{{host}}"],
+              "port": "{{port}}",
+              "path": ["api", "devices"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"machineIp\": \"192.168.1.10\",\n  \"probeNo\": 1,\n  \"probeAll\": 4,\n  \"machineName\": \"Server Room A\",\n  \"color\": \"FF5733\",\n  \"chkOnline\": \"1\",\n  \"chkSms\": \"0\",\n  \"chkMail\": \"1\",\n  \"chkMon\": \"0\",\n  \"chkLine\": \"0\",\n  \"chkReport\": \"1\",\n  \"minTemp\": 18.0,\n  \"maxTemp\": 28.0,\n  \"adjTemp\": 0.0,\n  \"sType\": \"t\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Creates a new sensor device.\n\n**Defaults applied server-side:**\n- `probeNo` → 1 if not provided\n- `sType` → `\"t\"` (temperature) if not provided\n\n**`sType` values:** `t` = Temperature, `h` = Humidity, `p` = Power"
+          },
+          "response": [
+            {
+              "name": "Created",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"machineIp\": \"192.168.1.10\",\n  \"probeNo\": 1,\n  \"machineName\": \"Server Room A\",\n  \"minTemp\": 18.0,\n  \"maxTemp\": 28.0,\n  \"sType\": \"t\"\n}"
+            },
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\"error\":\"invalid character ...\"}"
+            }
+          ]
+        },
+        {
+          "name": "Update Device",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "http://{{host}}:{{port}}/api/devices/192.168.1.10?probeNo=1",
+              "protocol": "http",
+              "host": ["{{host}}"],
+              "port": "{{port}}",
+              "path": ["api", "devices", "192.168.1.10"],
+              "query": [
+                { "key": "probeNo", "value": "1", "description": "Probe number (omit to update probe 1)" }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"machineName\": \"Server Room A - Updated\",\n  \"minTemp\": 15.0,\n  \"maxTemp\": 30.0,\n  \"chkMail\": \"1\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Partially updates a device. Only include fields to change — primary key fields (`machineIp`, `probeNo`) are protected and will be stripped even if provided.\n\n**Path param:** `id` — machine IP  \n**Query param:** `probeNo` — probe number (0 = first probe found for this IP)"
+          },
+          "response": [
+            {
+              "name": "Updated",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"machineIp\": \"192.168.1.10\",\n  \"probeNo\": 1,\n  \"machineName\": \"Server Room A - Updated\",\n  \"minTemp\": 15.0,\n  \"maxTemp\": 30.0\n}"
+            },
+            {
+              "name": "Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\"error\":\"Machine not found\"}"
+            }
+          ]
+        },
+        {
+          "name": "Delete Device",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "http://{{host}}:{{port}}/api/devices/192.168.1.10?probeNo=1",
+              "protocol": "http",
+              "host": ["{{host}}"],
+              "port": "{{port}}",
+              "path": ["api", "devices", "192.168.1.10"],
+              "query": [
+                { "key": "probeNo", "value": "1", "description": "Probe number. If omitted, ALL probes for this IP are deleted." }
+              ]
+            },
+            "description": "Deletes a device by IP and probe number.\n\n> **Warning:** Omitting `probeNo` deletes **all** probes for this IP."
+          },
+          "response": [
+            {
+              "name": "Deleted",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Machines (Legacy)",
+      "description": "Legacy compatibility endpoints that mirror the older API shape. Use `/api/devices` for new integrations.",
+      "item": [
+        {
+          "name": "List Machines with Status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://{{host}}:{{port}}/api/machines",
+              "protocol": "http",
+              "host": ["{{host}}"],
+              "port": "{{port}}",
+              "path": ["api", "machines"]
+            },
+            "description": "Returns all machines enriched with their latest temperature reading and online status.\n\n- `onlineStatus`: `\"Online\"` if last reading < 10 minutes ago, else `\"Offline\"`\n- `currentValue`: latest temperature reading\n- `lastUpdate`: ISO timestamp of latest reading"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "[\n  {\n    \"machineIp\": \"192.168.1.10\",\n    \"probeNo\": 1,\n    \"machineName\": \"Server Room A\",\n    \"currentValue\": 22.5,\n    \"lastUpdate\": \"2024-01-15 14:30:00\",\n    \"onlineStatus\": \"Online\"\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Update Machine",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "http://{{host}}:{{port}}/api/machines/192.168.1.10/1",
+              "protocol": "http",
+              "host": ["{{host}}"],
+              "port": "{{port}}",
+              "path": ["api", "machines", "192.168.1.10", "1"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"machineName\": \"Updated Name\",\n  \"minTemp\": 15.0,\n  \"maxTemp\": 30.0\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Updates a machine. Both IP and probe number are path params.\n\n**Path params:** `machineIp`, `probeNo`"
+          },
+          "response": [
+            {
+              "name": "Updated",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"machineIp\": \"192.168.1.10\",\n  \"probeNo\": 1,\n  \"machineName\": \"Updated Name\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Temperature Logs",
+      "item": [
+        {
+          "name": "Get Temperature Logs",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://{{host}}:{{port}}/api/temp-logs?startDate=2024-01-01&endDate=2024-01-31&limit=100",
+              "protocol": "http",
+              "host": ["{{host}}"],
+              "port": "{{port}}",
+              "path": ["api", "temp-logs"],
+              "query": [
+                { "key": "startDate", "value": "2024-01-01", "description": "Filter start date (YYYY-MM-DD). Requires endDate." },
+                { "key": "endDate",   "value": "2024-01-31", "description": "Filter end date (YYYY-MM-DD). Requires startDate." },
+                { "key": "limit",     "value": "100",        "description": "Max records to return (default: 100)" }
+              ]
+            },
+            "description": "Returns temperature log records ordered by most recent first.\n\nAll query params are optional. Without date filters, returns the latest `limit` records across all devices."
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "[\n  {\n    \"machineIp\": \"192.168.1.10\",\n    \"probeNo\": 1,\n    \"mcuId\": \"Server Room A\",\n    \"tempValue\": 22.5,\n    \"realValue\": 2250,\n    \"status\": \"N\",\n    \"sendTime\": \"2024-01-15T14:30:00Z\",\n    \"insertTime\": \"2024-01-15T14:30:00Z\",\n    \"sDate\": \"20240115\",\n    \"sTime\": \"14\"\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Get Temperature Log Report (Chart Data)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://{{host}}:{{port}}/api/reports/templog?startDate=2024-01-01&endDate=2024-01-31&devices=192.168.1.10,192.168.1.11",
+              "protocol": "http",
+              "host": ["{{host}}"],
+              "port": "{{port}}",
+              "path": ["api", "reports", "templog"],
+              "query": [
+                { "key": "startDate", "value": "2024-01-01", "description": "Start date (YYYY-MM-DD) — required" },
+                { "key": "endDate",   "value": "2024-01-31", "description": "End date (YYYY-MM-DD) — required" },
+                { "key": "devices",   "value": "192.168.1.10,192.168.1.11", "description": "Comma-separated machine IPs to filter (optional, returns all if omitted)" }
+              ]
+            },
+            "description": "Returns temperature logs plus pre-computed chart series data for UI rendering.\n\n**Response:**\n- `data`: raw log records (ordered ASC for charting)\n- `series`: array of `{ label, data: [{x: ISO timestamp, y: temp}] }` per device/probe"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"data\": [...],\n  \"series\": [\n    {\n      \"label\": \"Server Room A-P1\",\n      \"data\": [\n        { \"x\": \"2024-01-15T14:30:00Z\", \"y\": 22.5 },\n        { \"x\": \"2024-01-15T14:35:00Z\", \"y\": 22.8 }\n      ]\n    }\n  ]\n}"
+            },
+            {
+              "name": "Missing dates",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\"error\":\"startDate and endDate are required\"}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Temperature Errors (Alerts)",
+      "item": [
+        {
+          "name": "Get Temperature Errors",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://{{host}}:{{port}}/api/temp-errors?startDate=2024-01-01&endDate=2024-01-31&limit=100",
+              "protocol": "http",
+              "host": ["{{host}}"],
+              "port": "{{port}}",
+              "path": ["api", "temp-errors"],
+              "query": [
+                { "key": "startDate", "value": "2024-01-01", "description": "Filter start date (YYYY-MM-DD)" },
+                { "key": "endDate",   "value": "2024-01-31", "description": "Filter end date (YYYY-MM-DD)" },
+                { "key": "limit",     "value": "100",        "description": "Max records (default: 100)" }
+              ]
+            },
+            "description": "Returns temperature threshold violation records ordered by most recent first.\n\n**`tempStatus`:** `p` = in progress (alert active), `f` = finished (returned to normal)  \n**`errorType`:** `o` = over threshold, `n` = normal recovery  \n**Notification status fields:** `smsStatus`, `mailStatus`, `lineStatus` — 0 = not sent, 1 = sent"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "[\n  {\n    \"machineIp\": \"192.168.1.10\",\n    \"probeNo\": 1,\n    \"machineName\": \"Server Room A\",\n    \"tempValue\": 31.5,\n    \"errorTime\": \"2024-01-15T14:30:00Z\",\n    \"smsStatus\": 0,\n    \"mailStatus\": 1,\n    \"lineStatus\": 0,\n    \"minTemp\": 18.0,\n    \"maxTemp\": 28.0,\n    \"tempStatus\": \"p\",\n    \"errorType\": \"o\",\n    \"sType\": \"t\"\n  }\n]"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Polling Control",
+      "item": [
+        {
+          "name": "Trigger Manual Poll",
+          "request": {
+            "method": "POST",
+            "url": {
+              "raw": "http://{{host}}:{{port}}/api/poll",
+              "protocol": "http",
+              "host": ["{{host}}"],
+              "port": "{{port}}",
+              "path": ["api", "poll"]
+            },
+            "description": "Triggers an immediate poll-and-save cycle without waiting for the next scheduled interval (default: every 5 minutes).\n\nThe poll runs asynchronously. The response confirms the cycle was started, not that it completed."
+          },
+          "response": [
+            {
+              "name": "Started",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"status\":\"polling started\"}"
+            },
+            {
+              "name": "Service Not Ready",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\"error\":\"polling service not ready\"}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Real-time Stream (SSE)",
+      "item": [
+        {
+          "name": "Temperature Stream",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://{{host}}:{{port}}/api/temperature-stream",
+              "protocol": "http",
+              "host": ["{{host}}"],
+              "port": "{{port}}",
+              "path": ["api", "temperature-stream"]
+            },
+            "description": "Server-Sent Events (SSE) stream delivering real-time temperature data.\n\n**Note:** This endpoint holds an open HTTP connection — use an SSE-aware client (EventSource in browser, or a streaming HTTP client). Postman can consume SSE by enabling \"Response → Stream\".\n\n**Event types:**\n\n```\n// Initial connection confirmation\ndata: {\"type\":\"connected\"}\n\n// After each poll cycle (every ~5 min)\ndata: {\"type\":\"refresh\",\"saved\":4,\"errors\":0}\n\n// Every 5 seconds — live readings\ndata: {\n  \"type\": \"temperature\",\n  \"count\": 4,\n  \"lastUpdated\": \"2024-01-15 14:30:05\",\n  \"data\": [\n    {\n      \"machineName\": \"Server Room A\",\n      \"tempValue\": 22.5,\n      \"status\": \"N\",\n      \"type\": \"t\",\n      \"timestamp\": \"2024-01-15 14:30:05\"\n    }\n  ]\n}\n\n// Heartbeat (every 30s — keep connection alive)\n: heartbeat\n```\n\n**`status` values:** `N` = Normal, `H` = High, `L` = Low"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -17,6 +17,33 @@ import (
 	"tms-backend/internal/utils"
 )
 
+// jsonToColumn maps JSON field names sent by clients to their actual database
+// column names. GORM's Updates(map) uses map keys as literal SQL column names,
+// so any mismatch between the JSON tag and the gorm:"column:" tag must be
+// listed here. Fields where both names are identical need not be listed.
+var jsonToColumn = map[string]string{
+	"probeAll":    "probe_all",
+	"machineName": "machine_name",
+	"minTemp":     "min_temp",
+	"maxTemp":     "max_temp",
+	"adjTemp":     "adj_temp",
+}
+
+// toDBColumns translates a map keyed by JSON field names into one keyed by
+// database column names. Unknown keys pass through unchanged (they may already
+// be column names, or will be rejected by the DB which is fine).
+func toDBColumns(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		if col, ok := jsonToColumn[k]; ok {
+			out[col] = v
+		} else {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 func GetDevices(c *fiber.Ctx) error {
 	var machines []models.MasterMachine
 	if err := database.DB.Find(&machines).Error; err != nil {
@@ -80,18 +107,25 @@ func UpdateDevice(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	// Prevent primary key mutation
+	// Prevent primary key mutation (remove both JSON and DB column name variants)
 	delete(updates, "machine_ip")
 	delete(updates, "machineIp")
 	delete(updates, "probe_no")
 	delete(updates, "probeNo")
 
-	if err := database.DB.Model(&machine).Updates(updates).Error; err != nil {
+	// Translate JSON keys (e.g. "machineName") → DB column names (e.g. "machine_name")
+	// so GORM's Updates(map) generates valid SQL column references.
+	dbUpdates := toDBColumns(updates)
+
+	if err := database.DB.Model(&machine).Updates(dbUpdates).Error; err != nil {
 		utils.LogError("UpdateDevice - Failed to update machine (ip=%s, probe=%d): %v", machineIP, probeNo, err)
 		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
 	}
 
-	database.DB.First(&machine, "machine_ip = ? AND probe_no = ?", machine.MachineIP, machine.ProbeNo)
+	if err := database.DB.First(&machine, "machine_ip = ? AND probe_no = ?", machine.MachineIP, machine.ProbeNo).Error; err != nil {
+		utils.LogError("UpdateDevice - Failed to re-fetch machine after update: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
+	}
 	return c.JSON(machine)
 }
 
@@ -174,24 +208,30 @@ func UpdateMachine(c *fiber.Ctx) error {
 		return c.Status(404).JSON(fiber.Map{"error": "Machine not found"})
 	}
 
-	var updates map[string]interface{}
+	var updates map[string]any
 	if err := c.BodyParser(&updates); err != nil {
 		utils.LogError("UpdateMachine - Failed to parse body: %v", err)
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	// Prevent primary key mutation
+	// Prevent primary key mutation (remove both JSON and DB column name variants)
 	delete(updates, "machine_ip")
 	delete(updates, "machineIp")
 	delete(updates, "probe_no")
 	delete(updates, "probeNo")
 
-	if err := database.DB.Model(&machine).Updates(updates).Error; err != nil {
+	// Translate JSON keys → DB column names before passing to GORM
+	dbUpdates := toDBColumns(updates)
+
+	if err := database.DB.Model(&machine).Updates(dbUpdates).Error; err != nil {
 		utils.LogError("UpdateMachine - Failed to update machine (ip=%s, probe=%d): %v", machineIP, probeNo, err)
 		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
 	}
 
-	database.DB.First(&machine, "machine_ip = ? AND probe_no = ?", machineIP, probeNo)
+	if err := database.DB.First(&machine, "machine_ip = ? AND probe_no = ?", machineIP, probeNo).Error; err != nil {
+		utils.LogError("UpdateMachine - Failed to re-fetch machine after update: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
+	}
 	return c.JSON(machine)
 }
 
@@ -223,8 +263,14 @@ func GetTempLogReport(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "startDate and endDate are required"})
 	}
 
-	start, _ := time.Parse("2006-01-02", startDate)
-	end, _ := time.Parse("2006-01-02", endDate)
+	start, err := time.Parse("2006-01-02", startDate)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid startDate format, use YYYY-MM-DD"})
+	}
+	end, err := time.Parse("2006-01-02", endDate)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid endDate format, use YYYY-MM-DD"})
+	}
 	end = end.Add(24*time.Hour - time.Second)
 
 	query := database.DB.Model(&models.TempLog{}).Where("insert_time BETWEEN ? AND ?", start, end)
@@ -309,6 +355,9 @@ func GetTempErrors(c *fiber.Ctx) error {
 }
 
 func TriggerPoll(c *fiber.Ctx) error {
+	if services.GlobalPollingService == nil {
+		return c.Status(503).JSON(fiber.Map{"error": "polling service not ready"})
+	}
 	log.Println("Manual poll triggered")
 	services.GlobalPollingService.TriggerOnce()
 	return c.JSON(fiber.Map{"status": "polling started"})
