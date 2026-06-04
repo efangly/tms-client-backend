@@ -31,7 +31,23 @@ type DataSavedEvent struct {
 	Errors int `json:"errors"`
 }
 
-const MaxSensorTemp = 80.0
+const (
+	MaxSensorTemp = 80.0 // legacy fallback, not used directly
+
+	MinTempValue = -100.0
+	MaxTempValue = 50.0
+	MinHumiValue = 0.0
+	MaxHumiValue = 100.0
+)
+
+func isValidSensorValue(value float64, sType string) bool {
+	switch sType {
+	case "h":
+		return value >= MinHumiValue && value <= MaxHumiValue
+	default: // "t" or ""
+		return value >= MinTempValue && value <= MaxTempValue
+	}
+}
 
 type TemperatureUpdateEvent struct {
 	MachineName string  `json:"machineName"`
@@ -372,9 +388,9 @@ func (p *PollingService) pollAndSave() {
 
 			adjustedTemp := math.Round((probeData.TempValue+probeConfig.GetAdjTemp())*100) / 100
 
-			if adjustedTemp > MaxSensorTemp {
-				log.Printf("Skipping sensor error: %s Probe %d temp=%.2f°C exceeds %.0f°C threshold",
-					probeConfig.MachineName, probeData.ProbeNo, adjustedTemp, MaxSensorTemp)
+			if !isValidSensorValue(adjustedTemp, probeConfig.SType) {
+				log.Printf("Skipping out-of-range value: %s Probe %d sType=%s value=%.2f",
+					probeConfig.MachineName, probeData.ProbeNo, probeConfig.SType, adjustedTemp)
 				continue
 			}
 
@@ -501,9 +517,9 @@ func (p *PollingService) checkAlerts() {
 
 			adjustedTemp := math.Round((probeData.TempValue+probeConfig.GetAdjTemp())*100) / 100
 
-			if adjustedTemp > MaxSensorTemp {
-				log.Printf("Skipping sensor error: %s Probe %d temp=%.2f°C exceeds %.0f°C threshold",
-					probeConfig.MachineName, probeData.ProbeNo, adjustedTemp, MaxSensorTemp)
+			if !isValidSensorValue(adjustedTemp, probeConfig.SType) {
+				log.Printf("Skipping out-of-range value: %s Probe %d sType=%s value=%.2f",
+					probeConfig.MachineName, probeData.ProbeNo, probeConfig.SType, adjustedTemp)
 				continue
 			}
 
