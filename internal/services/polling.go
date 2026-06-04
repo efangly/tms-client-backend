@@ -39,6 +39,10 @@ type TemperatureUpdateEvent struct {
 	Status      string  `json:"status"`
 	MachineType string  `json:"type"`
 	Timestamp   string  `json:"timestamp"`
+	MinTemp     float64 `json:"minTemp"`
+	MaxTemp     float64 `json:"maxTemp"`
+	IPAddress   string  `json:"ipAddress"`
+	ProbeNo     int     `json:"probeNo"`
 }
 
 type PollingService struct {
@@ -518,6 +522,10 @@ func (p *PollingService) checkAlerts() {
 				Status:      tempStatus,
 				MachineType: probeConfig.SType,
 				Timestamp:   now.Format("2006-01-02 15:04:05"),
+				MinTemp:     probeConfig.GetMinTemp(),
+				MaxTemp:     probeConfig.GetMaxTemp(),
+				IPAddress:   probeConfig.MachineIP,
+				ProbeNo:     probeData.ProbeNo,
 			})
 		}
 	}
@@ -551,6 +559,10 @@ func (p *PollingService) checkAlerts() {
 			Status:      payload.Status,
 			MachineType: payload.MachineType,
 			Timestamp:   payload.Timestamp,
+			MinTemp:     payload.MinTemp,
+			MaxTemp:     payload.MaxTemp,
+			IPAddress:   payload.IPAddress,
+			ProbeNo:     payload.ProbeNo,
 		})
 	}
 	p.notifyTemperatureSubscribers(sseEvents)

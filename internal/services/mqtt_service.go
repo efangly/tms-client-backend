@@ -20,6 +20,10 @@ type MQTTTemperaturePayload struct {
 	Status      string  `json:"status"`
 	MachineType string  `json:"machinetype"`
 	Timestamp   string  `json:"timestamp"`
+	MinTemp     float64 `json:"minTemp"`
+	MaxTemp     float64 `json:"maxTemp"`
+	IPAddress   string  `json:"ipAddress"`
+	ProbeNo     int     `json:"probeNo"`
 }
 
 // MQTTService handles MQTT connection and publishing
