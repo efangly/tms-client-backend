@@ -584,6 +584,20 @@ func (p *PollingService) checkAlerts() {
 	p.notifyTemperatureSubscribers(sseEvents)
 }
 
+func (p *PollingService) sendAlertNotification(payload AlertPayload) {
+	if !p.apiNotificationService.IsLegacyAPIEnabled() {
+		return
+	}
+	go func(pl AlertPayload) {
+		if err := p.apiNotificationService.SendAlert(pl); err != nil {
+			utils.LogError("sendAlertNotification - Failed to send alert (machine=%s, probe=%d, type=%s): %v", pl.MachineName, pl.ProbeNo, pl.AlertType, err)
+			log.Printf("Failed to send alert notification: %v", err)
+		} else {
+			log.Printf("Alert notification sent for %s Probe %d [%s]", pl.MachineName, pl.ProbeNo, pl.AlertType)
+		}
+	}(payload)
+}
+
 func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo int, temp float64) {
 	alertKey := fmt.Sprintf("%s:%d", machine.MachineIP, probeNo)
 
@@ -650,30 +664,20 @@ func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo i
 			}
 		}
 
-		if p.apiNotificationService.IsLegacyAPIEnabled() {
-			alertPayload := AlertPayload{
-				McuID:       machine.MachineName,
-				Status:      map[string]string{"H": "00000010", "L": "00000011"}[currentState],
-				TempValue:   temp,
-				RealValue:   int(temp * 100),
-				Date:        dateStr,
-				Time:        timeStr,
-				Message:     alertMessage,
-				AlertType:   map[string]string{"H": "high", "L": "low"}[currentState],
-				MachineName: machine.MachineName,
-				ProbeNo:     probeNo,
-				MinTemp:     minTemp,
-				MaxTemp:     maxTemp,
-			}
-			go func(pl AlertPayload) {
-				if err := p.apiNotificationService.SendAlert(pl); err != nil {
-					utils.LogError("checkProbeAlert - Failed to send alert notification (machine=%s, probe=%d): %v", pl.MachineName, pl.ProbeNo, err)
-					log.Printf("Failed to send alert notification: %v", err)
-				} else {
-					log.Printf("Alert notification sent for %s Probe %d", pl.MachineName, pl.ProbeNo)
-				}
-			}(alertPayload)
-		}
+		p.sendAlertNotification(AlertPayload{
+			McuID:       machine.MachineName,
+			Status:      map[string]string{"H": "00000010", "L": "00000011"}[currentState],
+			TempValue:   temp,
+			RealValue:   int(temp * 100),
+			Date:        dateStr,
+			Time:        timeStr,
+			Message:     alertMessage,
+			AlertType:   map[string]string{"H": "high", "L": "low"}[currentState],
+			MachineName: machine.MachineName,
+			ProbeNo:     probeNo,
+			MinTemp:     minTemp,
+			MaxTemp:     maxTemp,
+		})
 	}
 
 	if currentState == "N" && (prevState == "H" || prevState == "L") {
@@ -683,30 +687,20 @@ func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo i
 		log.Printf("NORMAL: %s Probe %d - %.2f%s returned to normal range",
 			machine.MachineName, probeNo, temp, unit)
 
-		if p.apiNotificationService.IsLegacyAPIEnabled() {
-			alertPayload := AlertPayload{
-				McuID:       machine.MachineName,
-				Status:      "00000001",
-				TempValue:   temp,
-				RealValue:   int(temp * 100),
-				Date:        dateStr,
-				Time:        timeStr,
-				Message:     normalMessage,
-				AlertType:   "normal",
-				MachineName: machine.MachineName,
-				ProbeNo:     probeNo,
-				MinTemp:     minTemp,
-				MaxTemp:     maxTemp,
-			}
-			go func(pl AlertPayload) {
-				if err := p.apiNotificationService.SendAlert(pl); err != nil {
-					utils.LogError("checkProbeAlert - Failed to send recovery notification (machine=%s, probe=%d): %v", pl.MachineName, pl.ProbeNo, err)
-					log.Printf("Failed to send recovery notification: %v", err)
-				} else {
-					log.Printf("Recovery notification sent for %s Probe %d", pl.MachineName, pl.ProbeNo)
-				}
-			}(alertPayload)
-		}
+		p.sendAlertNotification(AlertPayload{
+			McuID:       machine.MachineName,
+			Status:      "00000001",
+			TempValue:   temp,
+			RealValue:   int(temp * 100),
+			Date:        dateStr,
+			Time:        timeStr,
+			Message:     normalMessage,
+			AlertType:   "normal",
+			MachineName: machine.MachineName,
+			ProbeNo:     probeNo,
+			MinTemp:     minTemp,
+			MaxTemp:     maxTemp,
+		})
 	}
 }
 
