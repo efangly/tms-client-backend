@@ -136,20 +136,26 @@ func parseHexResponse(data []byte, ip string) []ProbeData {
 	// Format 2: 41 41 5a ?? 5a [temp1_2b] 5a [hum1_2b] 5a [temp2_2b] 5a 0d (15 bytes)
 	var hasProbe2 bool
 	var is15Byte bool
+	var is18Byte bool
 
-	if len(data) == 15 {
+	switch len(data) {
+	case 18:
+		is18Byte = true
+		log.Printf("Detected 18 bytes → temp probe1 + humidity probe1 + temp probe2 + humidity probe2")
+	case 15:
 		is15Byte = true
 		log.Printf("Detected 15 bytes → temp probe1 + humidity probe1 + temp probe2")
-	} else if len(data) == 12 {
-		// 12 bytes usually means 2 probes
+	case 12:
 		hasProbe2 = true
 		log.Printf("Detected 12 bytes → expecting 2 probes")
-	} else if probeIndicator == 0x03 {
-		hasProbe2 = true
-		log.Printf("Probe indicator 0x03 → expecting 2 probes")
-	} else if len(data) == 9 {
+	case 9:
 		hasProbe2 = false
 		log.Printf("Detected 9 bytes → expecting 1 probe")
+	default:
+		if probeIndicator == 0x03 {
+			hasProbe2 = true
+			log.Printf("Probe indicator 0x03 → expecting 2 probes")
+		}
 	}
 
 	// Parse Probe 1 - Temperature (index 5, 6)
@@ -171,7 +177,61 @@ func parseHexResponse(data []byte, ip string) []ProbeData {
 		log.Printf("Probe 1: invalid separator at index [4], expected 0x5A, got 0x%02X", data[4])
 	}
 
-	if is15Byte {
+	if is18Byte {
+		// 18-byte format: bytes[5,6]=temp1 | bytes[8,9]=humidity1 | bytes[11,12]=temp2 | bytes[14,15]=humidity2
+
+		// Parse Humidity Probe 1 (index 8, 9)
+		if len(data) >= 10 && data[7] == 0x5a {
+			humRaw := int(data[8])<<8 | int(data[9])
+			humValue := calcHumidity(humRaw, probe1Temp, 0)
+			log.Printf("Humidity 1: bytes[8,9]=0x%02X%02X, raw=%d, rh=%.2f%%",
+				data[8], data[9], humRaw, humValue)
+			probes = append(probes, ProbeData{
+				ProbeNo:   2,
+				McuID:     "h",
+				TempValue: humValue,
+				RealValue: humRaw,
+				Status:    "00",
+			})
+		} else {
+			log.Printf("Humidity 1: invalid separator at index [7], expected 0x5A, got 0x%02X", data[7])
+		}
+
+		// Parse Temperature Probe 2 (index 11, 12)
+		var probe2Temp float64
+		if len(data) >= 13 && data[10] == 0x5a {
+			probe2Value := int(data[11])<<8 | int(data[12])
+			probe2Temp = float64(probe2Value-4000) * 0.01
+			log.Printf("Probe 2: bytes[11,12]=0x%02X%02X, decimal=%d, temp=%.2f°C",
+				data[11], data[12], probe2Value, probe2Temp)
+			probes = append(probes, ProbeData{
+				ProbeNo:   3,
+				McuID:     "A",
+				TempValue: roundTo2Decimal(probe2Temp),
+				RealValue: probe2Value,
+				Status:    "00",
+			})
+		} else {
+			log.Printf("Probe 2: invalid separator at index [10], expected 0x5A, got 0x%02X", data[10])
+		}
+
+		// Parse Humidity Probe 2 (index 14, 15)
+		if len(data) >= 16 && data[13] == 0x5a {
+			hum2Raw := int(data[14])<<8 | int(data[15])
+			hum2Value := calcHumidity(hum2Raw, probe2Temp, 0)
+			log.Printf("Humidity 2: bytes[14,15]=0x%02X%02X, raw=%d, rh=%.2f%%",
+				data[14], data[15], hum2Raw, hum2Value)
+			probes = append(probes, ProbeData{
+				ProbeNo:   4,
+				McuID:     "h",
+				TempValue: hum2Value,
+				RealValue: hum2Raw,
+				Status:    "00",
+			})
+		} else {
+			log.Printf("Humidity 2: invalid separator at index [13], expected 0x5A, got 0x%02X", data[13])
+		}
+	} else if is15Byte {
 		// 15-byte format: bytes[5,6]=temp1 | bytes[8,9]=humidity1 | bytes[11,12]=temp2
 
 		// Parse Humidity Probe 1 (index 8, 9)
