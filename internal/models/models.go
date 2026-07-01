@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -92,6 +93,31 @@ func (m *MasterMachine) GetUnit() string {
 	default:
 		return "°C"
 	}
+}
+
+// GetScheduleTimes parses the color field as a comma-separated list of "HHmm" schedule times.
+func (m *MasterMachine) GetScheduleTimes() []string {
+	if m.Color == "" {
+		return nil
+	}
+	var result []string
+	for _, t := range strings.Split(m.Color, ",") {
+		t = strings.TrimSpace(t)
+		if len(t) == 4 {
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
+// HasScheduleTime returns true if hhmm (e.g. "0800") is in the schedule.
+func (m *MasterMachine) HasScheduleTime(hhmm string) bool {
+	for _, t := range m.GetScheduleTimes() {
+		if t == hhmm {
+			return true
+		}
+	}
+	return false
 }
 
 // TempLog represents the temp_log table

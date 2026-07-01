@@ -139,6 +139,12 @@ func startServer() {
 	api.Get("/machines", handlers.GetMachines)
 	api.Put("/machines/:machineIp/:probeNo", handlers.UpdateMachine)
 
+	// Schedule routes (stored in color field of master_machine)
+	api.Get("/machines/:machineIp/:probeNo/schedule", handlers.GetSchedule)
+	api.Put("/machines/:machineIp/:probeNo/schedule", handlers.SetSchedule)
+	api.Post("/machines/:machineIp/:probeNo/schedule/:time", handlers.AddScheduleTime)
+	api.Delete("/machines/:machineIp/:probeNo/schedule/:time", handlers.RemoveScheduleTime)
+
 	// Temperature logs
 	api.Get("/temp-logs", handlers.GetTempLogs)
 	api.Get("/reports/templog", handlers.GetTempLogReport)

@@ -257,35 +257,17 @@ func GetTempLogs(c *fiber.Ctx) error {
 func GetTempLogReport(c *fiber.Ctx) error {
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
-	devices := c.Query("devices") // comma-separated machine IPs
+	devices := c.Query("devices") // comma-separated machine IPs or machine names
 
 	if startDate == "" || endDate == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "startDate and endDate are required"})
 	}
 
-	start, err := time.Parse("2006-01-02", startDate)
-	if err != nil {
+	if _, err := time.Parse("2006-01-02", startDate); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid startDate format, use YYYY-MM-DD"})
 	}
-	end, err := time.Parse("2006-01-02", endDate)
-	if err != nil {
+	if _, err := time.Parse("2006-01-02", endDate); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid endDate format, use YYYY-MM-DD"})
-	}
-	end = end.Add(24*time.Hour - time.Second)
-
-	query := database.DB.Model(&models.TempLog{}).Where("insert_time BETWEEN ? AND ?", start, end)
-
-	if devices != "" {
-		ips := splitComma(devices)
-		if len(ips) > 0 {
-			query = query.Where("machine_ip IN ?", ips)
-		}
-	}
-
-	var logs []models.TempLog
-	if err := query.Order("insert_time ASC").Find(&logs).Error; err != nil {
-		utils.LogError("GetTempLogReport failed: %v", err)
-		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
 	}
 
 	var allMachines []models.MasterMachine
@@ -297,6 +279,40 @@ func GetTempLogReport(c *fiber.Ctx) error {
 	for _, m := range allMachines {
 		key := fmt.Sprintf("%s:%d", m.MachineIP, m.ProbeNo)
 		machineNameMap[key] = m.MachineName
+	}
+
+	// Pass plain date-time strings (not time.Time) so the MySQL driver doesn't
+	// reinterpret them through the connection's loc=Local timezone, which would
+	// shift the window relative to insert_time's Thailand wall-clock values.
+	query := database.DB.Model(&models.TempLog{}).Where("insert_time BETWEEN ? AND ?", startDate+" 00:00:00", endDate+" 23:59:59")
+
+	if devices != "" {
+		idents := splitComma(devices)
+		if len(idents) > 0 {
+			// "devices" may contain machine IPs and/or machine names — resolve
+			// both to machine_ip so callers can filter by either.
+			wanted := make(map[string]bool, len(idents))
+			for _, id := range idents {
+				wanted[id] = true
+			}
+			ipSet := make(map[string]bool)
+			for _, m := range allMachines {
+				if wanted[m.MachineIP] || wanted[m.MachineName] {
+					ipSet[m.MachineIP] = true
+				}
+			}
+			ips := make([]string, 0, len(ipSet))
+			for ip := range ipSet {
+				ips = append(ips, ip)
+			}
+			query = query.Where("machine_ip IN ?", ips)
+		}
+	}
+
+	var logs []models.TempLog
+	if err := query.Order("insert_time ASC").Find(&logs).Error; err != nil {
+		utils.LogError("GetTempLogReport failed: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
 	}
 
 	type SeriesPoint struct {
@@ -425,4 +441,127 @@ func splitComma(s string) []string {
 		return []string{}
 	}
 	return strings.Split(s, ",")
+}
+
+func isValidHHmm(s string) bool {
+	if len(s) != 4 {
+		return false
+	}
+	h, err1 := strconv.Atoi(s[:2])
+	m, err2 := strconv.Atoi(s[2:])
+	return err1 == nil && err2 == nil && h >= 0 && h <= 23 && m >= 0 && m <= 59 && m%5 == 0
+}
+
+func getMachineForSchedule(c *fiber.Ctx) (*models.MasterMachine, error) {
+	machineIP := c.Params("machineIp")
+	probeNo, err := strconv.Atoi(c.Params("probeNo"))
+	if err != nil {
+		return nil, err
+	}
+	var machine models.MasterMachine
+	if err := database.DB.First(&machine, "machine_ip = ? AND probe_no = ?", machineIP, probeNo).Error; err != nil {
+		return nil, err
+	}
+	return &machine, nil
+}
+
+func GetSchedule(c *fiber.Ctx) error {
+	machine, err := getMachineForSchedule(c)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Machine not found"})
+	}
+	return c.JSON(fiber.Map{"times": machine.GetScheduleTimes()})
+}
+
+func SetSchedule(c *fiber.Ctx) error {
+	machine, err := getMachineForSchedule(c)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Machine not found"})
+	}
+
+	var body struct {
+		Times []string `json:"times"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	seen := make(map[string]bool)
+	var validated []string
+	for _, t := range body.Times {
+		t = strings.TrimSpace(t)
+		if !isValidHHmm(t) {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid time format: " + t + " (expected HHmm, e.g. 0800)"})
+		}
+		if !seen[t] {
+			seen[t] = true
+			validated = append(validated, t)
+		}
+	}
+	if len(validated) > 6 {
+		return c.Status(400).JSON(fiber.Map{"error": "maximum 6 schedule times allowed"})
+	}
+
+	colorVal := strings.Join(validated, ",")
+	if err := database.DB.Model(machine).Update("color", colorVal).Error; err != nil {
+		utils.LogError("SetSchedule - Failed to update (ip=%s, probe=%d): %v", machine.MachineIP, machine.ProbeNo, err)
+		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
+	}
+	machine.Color = colorVal
+	return c.JSON(fiber.Map{"times": machine.GetScheduleTimes()})
+}
+
+func AddScheduleTime(c *fiber.Ctx) error {
+	machine, err := getMachineForSchedule(c)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Machine not found"})
+	}
+
+	t := strings.TrimSpace(c.Params("time"))
+	if !isValidHHmm(t) {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid time format: " + t + " (expected HHmm, e.g. 0800)"})
+	}
+
+	times := machine.GetScheduleTimes()
+	for _, existing := range times {
+		if existing == t {
+			return c.JSON(fiber.Map{"times": times})
+		}
+	}
+	if len(times) >= 6 {
+		return c.Status(400).JSON(fiber.Map{"error": "maximum 6 schedule times allowed"})
+	}
+	times = append(times, t)
+
+	colorVal := strings.Join(times, ",")
+	if err := database.DB.Model(machine).Update("color", colorVal).Error; err != nil {
+		utils.LogError("AddScheduleTime - Failed to update (ip=%s, probe=%d): %v", machine.MachineIP, machine.ProbeNo, err)
+		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
+	}
+	machine.Color = colorVal
+	return c.JSON(fiber.Map{"times": machine.GetScheduleTimes()})
+}
+
+func RemoveScheduleTime(c *fiber.Ctx) error {
+	machine, err := getMachineForSchedule(c)
+	if err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Machine not found"})
+	}
+
+	t := strings.TrimSpace(c.Params("time"))
+	times := machine.GetScheduleTimes()
+	var updated []string
+	for _, existing := range times {
+		if existing != t {
+			updated = append(updated, existing)
+		}
+	}
+
+	colorVal := strings.Join(updated, ",")
+	if err := database.DB.Model(machine).Update("color", colorVal).Error; err != nil {
+		utils.LogError("RemoveScheduleTime - Failed to update (ip=%s, probe=%d): %v", machine.MachineIP, machine.ProbeNo, err)
+		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
+	}
+	machine.Color = colorVal
+	return c.JSON(fiber.Map{"times": machine.GetScheduleTimes()})
 }

@@ -244,6 +244,29 @@ func (p *PollingService) Start() {
 			}
 		}
 	}()
+
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							utils.LogError("PANIC in schedule report iteration: %v", r)
+							log.Printf("PANIC in schedule report iteration: %v (will retry next tick)", r)
+						}
+					}()
+					p.checkScheduleReports()
+				}()
+			case <-p.stopChan:
+				return
+			}
+		}
+	}()
 }
 
 func (p *PollingService) Stop() {
@@ -723,6 +746,78 @@ func (p *PollingService) notifyTemperatureSubscribers(events []TemperatureUpdate
 		case ch <- events:
 		default:
 		}
+	}
+}
+
+func (p *PollingService) checkScheduleReports() {
+	if sqlDB, err := database.DB.DB(); err == nil {
+		if err := sqlDB.Ping(); err != nil {
+			log.Printf("Database ping failed in checkScheduleReports: %v", err)
+			return
+		}
+	}
+
+	now := database.GetThailandTime()
+	currentHHmm := now.Truncate(5 * time.Minute).Format("1504")
+
+	var machines []models.MasterMachine
+	p.machineCacheMu.Lock()
+	if time.Since(p.machineCacheTime) < time.Minute && len(p.machineCache) > 0 {
+		machines = p.machineCache
+		p.machineCacheMu.Unlock()
+	} else {
+		p.machineCacheMu.Unlock()
+		if err := database.DB.Find(&machines).Error; err != nil {
+			utils.LogError("checkScheduleReports - Failed to load machines: %v", err)
+			return
+		}
+	}
+
+	for _, machine := range machines {
+		if !machine.HasScheduleTime(currentHHmm) {
+			continue
+		}
+
+		var logs []models.TempLog
+		if err := database.DB.
+			Where("machine_ip = ? AND probe_no = ?", machine.MachineIP, machine.ProbeNo).
+			Order("insert_time DESC").
+			Limit(1).
+			Find(&logs).Error; err != nil || len(logs) == 0 || logs[0].TempValue == nil {
+			log.Printf("checkScheduleReports - skipping %s Probe %d: no recent data", machine.MachineName, machine.ProbeNo)
+			continue
+		}
+
+		temp := *logs[0].TempValue
+		unit := machine.GetUnit()
+		typeLabel := machine.GetTypeLabel()
+		dateStr := now.Format("20060102")
+		timeStr := now.Format("15:04:05")
+
+		reportMessage := fmt.Sprintf(
+			"[รายงาน] %s %s(%d) ค่าปัจจุบัน: %.2f%s ช่วง: %.2f-%.2f%s %s %s",
+			typeLabel, machine.MachineName, machine.ProbeNo,
+			temp, unit,
+			machine.GetMinTemp(), machine.GetMaxTemp(), unit,
+			now.Format("2006/01/02"), timeStr,
+		)
+
+		log.Printf("Schedule report: %s Probe %d at %s", machine.MachineName, machine.ProbeNo, currentHHmm)
+
+		p.sendAlertNotification(AlertPayload{
+			McuID:       machine.MachineName,
+			Status:      "00000110",
+			TempValue:   temp,
+			RealValue:   int(temp * 100),
+			Date:        dateStr,
+			Time:        timeStr,
+			Message:     reportMessage,
+			AlertType:   "report",
+			MachineName: machine.MachineName,
+			ProbeNo:     machine.ProbeNo,
+			MinTemp:     machine.GetMinTemp(),
+			MaxTemp:     machine.GetMaxTemp(),
+		})
 	}
 }
 
