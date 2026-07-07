@@ -218,6 +218,12 @@ func main() {
 	// This runs before anything else so we can tell if the program starts at all
 	startupDiag("[1/5] main() started")
 
+	// Remember the directory the process was launched from before we chdir away.
+	// `go run` compiles to a temp directory, so os.Executable() (used below) points
+	// there instead of the project folder — this lets us fall back to the original
+	// launch directory when looking for .env.
+	originalDir, origDirErr := os.Getwd()
+
 	// Change working directory to exe location (critical for Windows Startup)
 	if err := changeToExeDir(); err != nil {
 		startupDiag(fmt.Sprintf("[ERROR] changeToExeDir failed: %v", err))
@@ -234,9 +240,18 @@ func main() {
 		startupDiag("[3/5] Console initialized OK")
 	}
 
-	// Get port for tray tooltip
+	// Get port for tray tooltip.
+	// Try .env next to the exe first; if that's missing (e.g. `go run` chdir'd us into
+	// a temp build dir), fall back to .env in the directory the process was launched from.
 	if err := godotenv.Load(); err == nil {
 		startupDiag("[4/5] .env loaded OK")
+	} else if origDirErr == nil && originalDir != "" {
+		fallbackEnv := filepath.Join(originalDir, ".env")
+		if fallbackErr := godotenv.Load(fallbackEnv); fallbackErr == nil {
+			startupDiag(fmt.Sprintf("[4/5] .env loaded OK (fallback: %s)", fallbackEnv))
+		} else {
+			startupDiag(fmt.Sprintf("[WARN] .env not found: %v (fallback %s also failed: %v)", err, fallbackEnv, fallbackErr))
+		}
 	} else {
 		startupDiag(fmt.Sprintf("[WARN] .env not found: %v", err))
 	}

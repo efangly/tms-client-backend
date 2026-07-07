@@ -37,50 +37,64 @@ type ServerConfig struct {
 	Name string
 }
 
-// RequestFromTCPServer connects to a TCP server and requests data
-func RequestFromTCPServer(config ServerConfig, command string, timeout time.Duration) ServerResponse {
-	result := ServerResponse{
-		IP:        config.IP,
-		Port:      config.Port,
-		Connected: false,
-		Timestamp: time.Now(),
-		Probes:    []ProbeData{},
-	}
+// Sensor readings outside these bounds indicate a broken/disconnected probe
+// (e.g. a temperature of -6666°C) rather than a real measurement.
+const (
+	minValidTemp      = -100.0
+	maxValidTemp      = 50.0
+	minValidHumidity  = 0.0
+	maxValidHumidity  = 100.0
+	maxRequestRetries = 3
+)
 
+// isProbeValueValid reports whether a parsed probe's value is physically
+// plausible. Probes with McuID "h" carry relative humidity (0-100%),
+// everything else carries temperature (-100 to 50°C).
+func isProbeValueValid(p ProbeData) bool {
+	if p.McuID == "h" {
+		return p.TempValue >= minValidHumidity && p.TempValue <= maxValidHumidity
+	}
+	return p.TempValue >= minValidTemp && p.TempValue <= maxValidTemp
+}
+
+// filterValidProbes drops probes with out-of-range values, logging each one
+// so a sensor glitch is visible without failing the whole response.
+func filterValidProbes(probes []ProbeData, ip string) (valid []ProbeData, hasAnomaly bool) {
+	valid = make([]ProbeData, 0, len(probes))
+	for _, p := range probes {
+		if !isProbeValueValid(p) {
+			log.Printf("TCP %s: Anomalous sensor value, skipping probe %d (McuID=%s value=%.2f)",
+				ip, p.ProbeNo, p.McuID, p.TempValue)
+			hasAnomaly = true
+			continue
+		}
+		valid = append(valid, p)
+	}
+	return valid, hasAnomaly
+}
+
+// requestOnce performs a single connect/write/read/parse cycle against the
+// TCP server and returns the raw response bytes together with the parsed probes.
+func requestOnce(config ServerConfig, command string, timeout time.Duration) (dataBuffer []byte, probes []ProbeData, connected bool, err error) {
 	address := net.JoinHostPort(config.IP, fmt.Sprintf("%d", config.Port))
 
-	// Connect with timeout
-	conn, err := net.DialTimeout("tcp", address, timeout)
-	if err != nil {
-		result.Error = fmt.Sprintf("Connection failed: %v", err)
-		log.Printf("TCP %s: %s", config.IP, result.Error)
-		return result
+	conn, dialErr := net.DialTimeout("tcp", address, timeout)
+	if dialErr != nil {
+		return nil, nil, false, fmt.Errorf("Connection failed: %w", dialErr)
 	}
 	defer conn.Close()
 
-	result.Connected = true
-
-	// Set read/write deadline
 	conn.SetDeadline(time.Now().Add(timeout))
 
-	// Send command
-	if command == "" {
-		command = "A"
-	}
-	_, err = conn.Write([]byte(command + "\r"))
-	if err != nil {
-		result.Error = fmt.Sprintf("Write failed: %v", err)
-		log.Printf("TCP %s: %s", config.IP, result.Error)
-		return result
+	_, writeErr := conn.Write([]byte(command + "\r"))
+	if writeErr != nil {
+		return nil, nil, true, fmt.Errorf("Write failed: %w", writeErr)
 	}
 
-	// Read response
 	buffer := make([]byte, 1024)
-	var dataBuffer []byte
-
 	for {
-		n, err := conn.Read(buffer)
-		if err != nil {
+		n, readErr := conn.Read(buffer)
+		if readErr != nil {
 			// Timeout or EOF is expected
 			break
 		}
@@ -93,8 +107,57 @@ func RequestFromTCPServer(config ServerConfig, command string, timeout time.Dura
 	}
 
 	if len(dataBuffer) > 0 {
+		probes = parseHexResponse(dataBuffer, config.IP)
+	}
+
+	return dataBuffer, probes, true, nil
+}
+
+// RequestFromTCPServer connects to a TCP server and requests data. If a
+// parsed reading is physically implausible (e.g. a disconnected sensor
+// reporting -6666°C), that probe is dropped and the request is retried
+// against the sensor rather than forwarding the bad value.
+func RequestFromTCPServer(config ServerConfig, command string, timeout time.Duration) ServerResponse {
+	result := ServerResponse{
+		IP:        config.IP,
+		Port:      config.Port,
+		Connected: false,
+		Timestamp: time.Now(),
+		Probes:    []ProbeData{},
+	}
+
+	if command == "" {
+		command = "A"
+	}
+
+	var dataBuffer []byte
+	var probes []ProbeData
+
+	for attempt := 1; attempt <= maxRequestRetries; attempt++ {
+		buf, parsed, connected, err := requestOnce(config, command, timeout)
+		result.Connected = result.Connected || connected
+
+		if err != nil {
+			result.Error = err.Error()
+			log.Printf("TCP %s: %s", config.IP, result.Error)
+			return result
+		}
+
+		dataBuffer = buf
+		valid, hasAnomaly := filterValidProbes(parsed, config.IP)
+		probes = valid
+
+		if !hasAnomaly || attempt == maxRequestRetries {
+			break
+		}
+
+		log.Printf("TCP %s: Anomalous sensor data detected, retrying request (attempt %d/%d)",
+			config.IP, attempt, maxRequestRetries)
+	}
+
+	if len(dataBuffer) > 0 {
 		result.Data = hex.EncodeToString(dataBuffer)
-		result.Probes = parseHexResponse(dataBuffer, config.IP)
+		result.Probes = probes
 		log.Printf("TCP %s: Parsed %d probes", config.IP, len(result.Probes))
 	}
 

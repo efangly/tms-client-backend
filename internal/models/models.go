@@ -58,22 +58,23 @@ func (m *MasterMachine) GetAdjTemp() float64 {
 
 // IsTemperatureType returns true if sType is 't' (temperature)
 func (m *MasterMachine) IsTemperatureType() bool {
-	return m.SType == "t" || m.SType == ""
+	sType := strings.ToLower(m.SType)
+	return sType == "t" || sType == ""
 }
 
 // IsHumidityType returns true if sType is 'h' (humidity)
 func (m *MasterMachine) IsHumidityType() bool {
-	return m.SType == "h"
+	return strings.ToLower(m.SType) == "h"
 }
 
 // IsPowerType returns true if sType is 'p' (power)
 func (m *MasterMachine) IsPowerType() bool {
-	return m.SType == "p"
+	return strings.ToLower(m.SType) == "p"
 }
 
 // GetTypeLabel returns human-readable type label
 func (m *MasterMachine) GetTypeLabel() string {
-	switch m.SType {
+	switch strings.ToLower(m.SType) {
 	case "h":
 		return "Humidity"
 	case "p":
@@ -85,7 +86,7 @@ func (m *MasterMachine) GetTypeLabel() string {
 
 // GetUnit returns the unit for this sensor type
 func (m *MasterMachine) GetUnit() string {
-	switch m.SType {
+	switch strings.ToLower(m.SType) {
 	case "h":
 		return "%"
 	case "p":

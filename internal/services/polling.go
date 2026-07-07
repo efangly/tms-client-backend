@@ -41,7 +41,7 @@ const (
 )
 
 func isValidSensorValue(value float64, sType string) bool {
-	switch sType {
+	switch strings.ToLower(sType) {
 	case "h":
 		return value >= MinHumiValue && value <= MaxHumiValue
 	default: // "t" or ""
@@ -75,6 +75,8 @@ type PollingService struct {
 	mqttService            *MQTTService
 	alertStates            map[string]string
 	alertStatesMu          sync.Mutex
+	alertLastSent          map[string]time.Time
+	alertLastSentMu        sync.Mutex
 	machineCache           []models.MasterMachine
 	machineCacheTime       time.Time
 	machineCacheMu         sync.Mutex
@@ -90,6 +92,7 @@ func NewPollingService() *PollingService {
 		apiNotificationService: NewAPINotificationService(),
 		mqttService:            GlobalMQTTService,
 		alertStates:            make(map[string]string),
+		alertLastSent:          make(map[string]time.Time),
 	}
 }
 
@@ -215,6 +218,7 @@ func (p *PollingService) Start() {
 						}
 					}()
 					p.pollAndSave()
+					p.checkMonitoredMachines()
 				}()
 			case <-p.stopChan:
 				return
@@ -639,14 +643,35 @@ func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo i
 	// Claim the state transition atomically before any side-effecting work.
 	// This prevents the poll goroutine and the alert-check goroutine from both
 	// sending duplicate notifications for the same transition.
+	// Exception: when chkReport is enabled for this probe, an ongoing H/L state
+	// must keep resending (not dedup on state) so the alert repeats until back
+	// to normal — but throttled below so it doesn't fire on every 5s tick.
+	repeatWhileOutOfRange := machine.ChkReport == "1" && (currentState == "H" || currentState == "L")
+
 	p.alertStatesMu.Lock()
 	prevState := p.alertStates[alertKey]
-	if currentState == prevState {
+	isTransition := currentState != prevState
+	if !isTransition && !repeatWhileOutOfRange {
 		p.alertStatesMu.Unlock()
 		return
 	}
 	p.alertStates[alertKey] = currentState
 	p.alertStatesMu.Unlock()
+
+	if !isTransition && repeatWhileOutOfRange {
+		// Ongoing out-of-range state: only resend once per pollInterval instead
+		// of on every alert-check tick (which runs every few seconds), otherwise
+		// this spams a notification in a tight loop for as long as it stays out
+		// of range.
+		p.alertLastSentMu.Lock()
+		last, sent := p.alertLastSent[alertKey]
+		nowTime := time.Now()
+		if sent && nowTime.Sub(last) < p.pollInterval {
+			p.alertLastSentMu.Unlock()
+			return
+		}
+		p.alertLastSentMu.Unlock()
+	}
 
 	now := database.GetThailandTime().Truncate(time.Microsecond)
 	dateStr := now.Format("20060102")
@@ -660,10 +685,10 @@ func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo i
 
 		unit := machine.GetUnit()
 		typeLabel := machine.GetTypeLabel()
-		alertMessage := fmt.Sprintf("%s %sเกิน (ค่าปัจจุบัน: %.2f%s, ช่วง: %.2f-%.2f%s) %s(%d) %s %s",
+		alertMessage := fmt.Sprintf("%s %sเกิน (ค่าปัจจุบัน: %.2f%s, ช่วง: %.2f-%.2f%s) %s %s %s",
 			typeLabel,
 			map[string]string{"H": "สูง", "L": "ต่ำ"}[currentState],
-			temp, unit, minTemp, maxTemp, unit, machine.MachineName, probeNo, now.Format("2006/01/02"), timeStr)
+			temp, unit, minTemp, maxTemp, unit, machine.MachineName, now.Format("2006/01/02"), timeStr)
 
 		log.Printf("ALERT: %s Probe %d - %s %.2f%s is %s (min: %.2f, max: %.2f)",
 			machine.MachineName, probeNo, typeLabel, temp, unit, alertTypeStr, minTemp, maxTemp)
@@ -701,12 +726,22 @@ func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo i
 			MinTemp:     minTemp,
 			MaxTemp:     maxTemp,
 		})
+
+		if machine.ChkReport == "1" && machine.ChkMon != "1" {
+			p.updateChkMon(machine.MachineIP, probeNo, "1")
+		}
+
+		if repeatWhileOutOfRange {
+			p.alertLastSentMu.Lock()
+			p.alertLastSent[alertKey] = time.Now()
+			p.alertLastSentMu.Unlock()
+		}
 	}
 
 	if currentState == "N" && (prevState == "H" || prevState == "L") {
 		unit := machine.GetUnit()
-		normalMessage := fmt.Sprintf("%s กลับเข้าช่วงปกติแล้ว (ค่าปัจจุบัน: %.2f%s) %s %s",
-			machine.GetTypeLabel(), temp, unit, now.Format("2006/01/02"), timeStr)
+		normalMessage := fmt.Sprintf("%s กลับเข้าช่วงปกติแล้ว (ค่าปัจจุบัน: %.2f%s, ช่วง: %.2f-%.2f%s) %s %s %s",
+			machine.GetTypeLabel(), temp, unit, minTemp, maxTemp, unit, machine.MachineName, now.Format("2006/01/02"), timeStr)
 		log.Printf("NORMAL: %s Probe %d - %.2f%s returned to normal range",
 			machine.MachineName, probeNo, temp, unit)
 
@@ -724,7 +759,50 @@ func (p *PollingService) checkProbeAlert(machine models.MasterMachine, probeNo i
 			MinTemp:     minTemp,
 			MaxTemp:     maxTemp,
 		})
+
+		if machine.ChkReport == "1" {
+			p.updateChkMon(machine.MachineIP, probeNo, "0")
+			p.alertLastSentMu.Lock()
+			delete(p.alertLastSent, alertKey)
+			p.alertLastSentMu.Unlock()
+		}
 	}
+}
+
+// updateChkMon persists the chkMon flag for a probe in master_machine. It is used to
+// mark a probe as "actively alerting" (1) while chkReport is enabled and the reading is
+// out of range, and to clear it (0) once the reading returns to normal.
+func (p *PollingService) updateChkMon(machineIP string, probeNo int, value string) {
+	if err := database.DB.Model(&models.MasterMachine{}).
+		Where("machine_ip = ? AND probe_no = ?", machineIP, probeNo).
+		Update("chkMon", value).Error; err != nil {
+		utils.LogError("updateChkMon - Failed to update chkMon (machine=%s, probe=%d): %v", machineIP, probeNo, err)
+	}
+}
+
+// checkMonitoredMachines re-checks machines that are currently flagged with chkMon=1
+// (i.e. chkReport is enabled and the last reading was out of range) so that alerts keep
+// repeating via checkAlerts/checkProbeAlert until the reading returns to normal, at which
+// point chkMon is cleared back to 0.
+func (p *PollingService) checkMonitoredMachines() {
+	machines, err := p.getMachines()
+	if err != nil {
+		log.Printf("checkMonitoredMachines - Failed to load machines: %v", err)
+		return
+	}
+
+	hasMonitored := false
+	for _, m := range machines {
+		if m.ChkMon == "1" {
+			hasMonitored = true
+			break
+		}
+	}
+	if !hasMonitored {
+		return
+	}
+
+	p.checkAlerts()
 }
 
 func (p *PollingService) notifySubscribers(event DataSavedEvent) {
