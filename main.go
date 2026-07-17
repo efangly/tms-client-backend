@@ -266,6 +266,10 @@ func main() {
 	tray.Run(port, startServer, cleanup)
 }
 
+// maxStartupDiagLogSize caps each startup diagnostic log file so it doesn't
+// grow forever across the many restarts of a long-lived background service.
+const maxStartupDiagLogSize = 200 * 1024 // 200 KB
+
 // startupDiag appends a diagnostic message to startup_debug.log.
 // Writes to %TEMP% first (absolute, always writable) then also next to the exe.
 // Used to debug startup issues; safe to leave in production builds.
@@ -281,14 +285,19 @@ func startupDiag(msg string) {
 	if tmpDir == "" {
 		tmpDir = `C:\Windows\Temp`
 	}
-	tmpLog := filepath.Join(tmpDir, "tms-backend-startup.log")
-	if f, err := os.OpenFile(tmpLog, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
-		f.WriteString(line)
-		f.Close()
-	}
+	appendToDiagLog(filepath.Join(tmpDir, "tms-backend-startup.log"), line)
 
 	// Also write next to the exe (may fail before changeToExeDir, that's OK)
-	if f, err := os.OpenFile("startup_debug.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+	appendToDiagLog("startup_debug.log", line)
+}
+
+// appendToDiagLog appends line to path, truncating the file first if it has
+// grown past maxStartupDiagLogSize so it stays bounded across restarts.
+func appendToDiagLog(path, line string) {
+	if info, err := os.Stat(path); err == nil && info.Size() > maxStartupDiagLogSize {
+		os.Remove(path)
+	}
+	if f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
 		f.WriteString(line)
 		f.Close()
 	}

@@ -85,6 +85,18 @@ func (m *MQTTService) Connect() error {
 		return nil
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Tear down any previous client before replacing it, otherwise its
+	// connection/background goroutines are leaked on every reconnect.
+	if m.client != nil {
+		if m.client.IsConnected() {
+			m.client.Disconnect(250)
+		}
+		m.client = nil
+	}
+
 	opts := mqtt.NewClientOptions()
 	opts.AddBroker(fmt.Sprintf("tcp://%s:%s", m.broker, m.port))
 	opts.SetClientID(m.clientID)
@@ -110,13 +122,15 @@ func (m *MQTTService) Connect() error {
 		log.Println("MQTT reconnected to broker")
 	})
 
-	m.client = mqtt.NewClient(opts)
+	client := mqtt.NewClient(opts)
 
-	token := m.client.Connect()
+	token := client.Connect()
 	if token.Wait() && token.Error() != nil {
 		utils.LogError("MQTT connect failed: %v", token.Error())
 		return fmt.Errorf("MQTT connect failed: %v", token.Error())
 	}
+
+	m.client = client
 
 	log.Printf("MQTT connected to %s:%s (clientID: %s)", m.broker, m.port, m.clientID)
 	log.Printf("Topic: %s", m.topic)
@@ -125,8 +139,12 @@ func (m *MQTTService) Connect() error {
 
 // Disconnect closes the MQTT connection
 func (m *MQTTService) Disconnect() {
-	if m.client != nil && m.client.IsConnected() {
-		m.client.Disconnect(1000)
+	m.mu.Lock()
+	client := m.client
+	m.mu.Unlock()
+
+	if client != nil && client.IsConnected() {
+		client.Disconnect(1000)
 		log.Println("MQTT disconnected")
 	}
 }
@@ -138,17 +156,35 @@ func (m *MQTTService) IsEnabled() bool {
 
 // IsConnected returns whether MQTT client is currently connected
 func (m *MQTTService) IsConnected() bool {
-	return m.enabled && m.client != nil && m.client.IsConnected()
+	if !m.enabled {
+		return false
+	}
+	m.mu.Lock()
+	client := m.client
+	m.mu.Unlock()
+	return client != nil && client.IsConnected()
+}
+
+// getConnectedClient returns the current client, reconnecting first if needed.
+func (m *MQTTService) getConnectedClient() (mqtt.Client, error) {
+	if !m.IsConnected() {
+		log.Println("MQTT not connected, attempting to reconnect...")
+		if err := m.Connect(); err != nil {
+			return nil, fmt.Errorf("MQTT reconnect failed: %v", err)
+		}
+	}
+
+	m.mu.Lock()
+	client := m.client
+	m.mu.Unlock()
+	return client, nil
 }
 
 // PublishTemperature publishes a single temperature reading to MQTT
 func (m *MQTTService) PublishTemperature(payload MQTTTemperaturePayload) error {
-	if !m.IsConnected() {
-		// Try to reconnect if not connected
-		log.Println("MQTT not connected, attempting to reconnect...")
-		if err := m.Connect(); err != nil {
-			return fmt.Errorf("MQTT reconnect failed: %v", err)
-		}
+	client, err := m.getConnectedClient()
+	if err != nil {
+		return err
 	}
 
 	data, err := json.Marshal(payload)
@@ -157,7 +193,7 @@ func (m *MQTTService) PublishTemperature(payload MQTTTemperaturePayload) error {
 	}
 
 	// Publish to topic: tms/temperature
-	token := m.client.Publish(m.topic, 0, false, data)
+	token := client.Publish(m.topic, 0, false, data)
 	token.Wait()
 
 	if token.Error() != nil {
@@ -170,12 +206,9 @@ func (m *MQTTService) PublishTemperature(payload MQTTTemperaturePayload) error {
 
 // PublishTemperatureBatch publishes multiple temperature readings to MQTT
 func (m *MQTTService) PublishTemperatureBatch(payloads []MQTTTemperaturePayload) error {
-	if !m.IsConnected() {
-		// Try to reconnect if not connected
-		log.Println("MQTT not connected, attempting to reconnect...")
-		if err := m.Connect(); err != nil {
-			return fmt.Errorf("MQTT reconnect failed: %v", err)
-		}
+	client, err := m.getConnectedClient()
+	if err != nil {
+		return err
 	}
 
 	// Publish all readings as a single batch message
@@ -184,7 +217,7 @@ func (m *MQTTService) PublishTemperatureBatch(payloads []MQTTTemperaturePayload)
 		return fmt.Errorf("failed to marshal MQTT batch payload: %v", err)
 	}
 
-	token := m.client.Publish(m.topic, 0, false, data)
+	token := client.Publish(m.topic, 0, false, data)
 	token.Wait()
 
 	if token.Error() != nil {

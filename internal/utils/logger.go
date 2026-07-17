@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,6 +22,10 @@ var (
 func InitLogger() error {
 	return nil
 }
+
+// errorLogRetention is how long error_*.txt files are kept before
+// cleanupOldLogs deletes them, since they are otherwise never removed.
+const errorLogRetention = 30 * 24 * time.Hour
 
 // ensureLogFile creates or rotates the error log file as needed.
 // Must be called with loggerMu held.
@@ -44,6 +49,9 @@ func ensureLogFile() error {
 		return fmt.Errorf("failed to create logs directory: %v", err)
 	}
 
+	// Only runs when rotating to a new day, so this stays cheap.
+	cleanupOldLogs(logsDir)
+
 	filename := fmt.Sprintf("error_%s.txt", today)
 	logPath := filepath.Join(logsDir, filename)
 
@@ -56,6 +64,26 @@ func ensureLogFile() error {
 	currentLogDate = today
 	ErrorLogger = log.New(file, "[ERROR] ", log.Ldate|log.Ltime|log.Lshortfile)
 	return nil
+}
+
+// cleanupOldLogs removes error_*.txt files in logsDir older than errorLogRetention.
+func cleanupOldLogs(logsDir string) {
+	entries, err := os.ReadDir(logsDir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-errorLogRetention)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "error_") || !strings.HasSuffix(name, ".txt") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		os.Remove(filepath.Join(logsDir, name))
+	}
 }
 
 // LogError logs an error to both console and the error log file.
