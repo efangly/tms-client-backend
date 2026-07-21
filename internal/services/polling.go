@@ -413,6 +413,12 @@ func (p *PollingService) pollAndSave() {
 				probeConfig.SType = "t"
 			}
 
+			if hasConfig && probeConfig.IsHumidityType() != (probeData.McuID == "h") {
+				log.Printf("Skipping mismatched probe format: %s Probe %d configured as sType=%s but device sent McuID=%s (likely a stale/legacy-format response for this probe)",
+					probeConfig.MachineName, probeData.ProbeNo, probeConfig.SType, probeData.McuID)
+				continue
+			}
+
 			adjustedTemp := math.Round((probeData.TempValue+probeConfig.GetAdjTemp())*100) / 100
 
 			if !isValidSensorValue(adjustedTemp, probeConfig.SType) {
@@ -540,6 +546,12 @@ func (p *PollingService) checkAlerts() {
 			if !hasConfig {
 				probeConfig = probes[0]
 				probeConfig.ProbeNo = probeData.ProbeNo
+			}
+
+			if hasConfig && probeConfig.IsHumidityType() != (probeData.McuID == "h") {
+				log.Printf("Skipping mismatched probe format: %s Probe %d configured as sType=%s but device sent McuID=%s (likely a stale/legacy-format response for this probe)",
+					probeConfig.MachineName, probeData.ProbeNo, probeConfig.SType, probeData.McuID)
+				continue
 			}
 
 			adjustedTemp := math.Round((probeData.TempValue+probeConfig.GetAdjTemp())*100) / 100
