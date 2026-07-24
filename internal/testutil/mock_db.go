@@ -63,6 +63,14 @@ var TempLogColumns = []string{
 	"status", "send_time", "insert_time", "sDate", "sTime",
 }
 
+// TempLogArchiveColumns lists the database columns for temp_log_archive.
+var TempLogArchiveColumns = TempLogColumns
+
+// ArchiveManifestColumns lists the database columns for archive_manifest.
+var ArchiveManifestColumns = []string{
+	"id", "source_table", "period_date", "file_path", "row_count", "archived_at",
+}
+
 // TempErrorColumns lists the database columns for temp_error.
 var TempErrorColumns = []string{
 	"machine_ip", "probe_no", "machine_name", "temp_value", "error_time",

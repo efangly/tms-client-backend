@@ -194,6 +194,44 @@ func (t *TempError) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
+// TempLogArchive represents the temp_log_archive table, the restore
+// destination for archived temp_log rows. Same shape as TempLog, but a
+// distinct table so archived data never mixes back into the live table.
+type TempLogArchive struct {
+	MachineIP  string     `gorm:"column:machine_ip;size:15;primaryKey" json:"machineIp"`
+	ProbeNo    int        `gorm:"column:probe_no;primaryKey;default:1" json:"probeNo"`
+	McuID      *string    `gorm:"column:mcu_id;size:50" json:"mcuId"`
+	TempValue  *float64   `gorm:"column:temp_value" json:"tempValue"`
+	RealValue  *int       `gorm:"column:real_value" json:"realValue"`
+	Status     *string    `gorm:"column:status;size:8" json:"status"`
+	SendTime   *time.Time `gorm:"column:send_time" json:"sendTime"`
+	InsertTime time.Time  `gorm:"column:insert_time;primaryKey;type:datetime" json:"insertTime"`
+	SDate      *string    `gorm:"column:sDate;size:8" json:"sDate"`
+	STime      *string    `gorm:"column:sTime;size:2" json:"sTime"`
+}
+
+// TableName specifies table name for TempLogArchive
+func (TempLogArchive) TableName() string {
+	return "temp_log_archive"
+}
+
+// ArchiveManifest tracks which day's worth of temp_log data has been
+// archived to a local file, so restore can find the right file without
+// scanning the filesystem.
+type ArchiveManifest struct {
+	ID          int       `gorm:"column:id;primaryKey;autoIncrement" json:"id"`
+	SourceTable string    `gorm:"column:source_table;size:50;uniqueIndex:uidx_archive_period" json:"sourceTable"`
+	PeriodDate  string    `gorm:"column:period_date;size:10;uniqueIndex:uidx_archive_period" json:"periodDate"` // YYYY-MM-DD
+	FilePath    string    `gorm:"column:file_path;size:255" json:"filePath"`
+	RowCount    int       `gorm:"column:row_count" json:"rowCount"`
+	ArchivedAt  time.Time `gorm:"column:archived_at" json:"archivedAt"`
+}
+
+// TableName specifies table name for ArchiveManifest
+func (ArchiveManifest) TableName() string {
+	return "archive_manifest"
+}
+
 // ConfigValue represents the config_value table
 type ConfigValue struct {
 	ID          int     `gorm:"column:id;primaryKey;autoIncrement" json:"id"`

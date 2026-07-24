@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"gorm.io/gorm"
 
 	"tms-backend/internal/database"
 	"tms-backend/internal/models"
@@ -239,11 +241,23 @@ func GetTempLogs(c *fiber.Ctx) error {
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 	limit := c.QueryInt("limit", 100)
+	devices := c.Query("devices") // comma-separated machine IPs/names, optionally ":probeNo"
+	includeArchive := c.QueryBool("includeArchive", false)
+
+	var allMachines []models.MasterMachine
+	if devices != "" {
+		if err := database.DB.Find(&allMachines).Error; err != nil {
+			utils.LogError("GetTempLogs - Failed to load machines: %v", err)
+		}
+	}
 
 	query := database.DB.Model(&models.TempLog{})
 	if startDate != "" && endDate != "" {
 		query = query.Where("insert_time BETWEEN ? AND ?",
 			startDate+" 00:00:00", endDate+" 23:59:59")
+	}
+	if devices != "" {
+		query = applyDeviceFilter(query, devices, allMachines)
 	}
 
 	var logs []models.TempLog
@@ -251,6 +265,16 @@ func GetTempLogs(c *fiber.Ctx) error {
 		utils.LogError("GetTempLogs failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
 	}
+
+	if includeArchive && startDate != "" && endDate != "" {
+		archived, err := fetchArchivedTempLogs(startDate, endDate, devices, allMachines)
+		if err != nil {
+			utils.LogError("GetTempLogs - archive fetch failed: %v", err)
+		} else {
+			logs = mergeTempLogs(logs, archived, true, limit)
+		}
+	}
+
 	return c.JSON(logs)
 }
 
@@ -258,6 +282,7 @@ func GetTempLogReport(c *fiber.Ctx) error {
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 	devices := c.Query("devices") // comma-separated machine IPs or machine names
+	includeArchive := c.QueryBool("includeArchive", false)
 
 	if startDate == "" || endDate == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "startDate and endDate are required"})
@@ -287,32 +312,22 @@ func GetTempLogReport(c *fiber.Ctx) error {
 	query := database.DB.Model(&models.TempLog{}).Where("insert_time BETWEEN ? AND ?", startDate+" 00:00:00", endDate+" 23:59:59")
 
 	if devices != "" {
-		idents := splitComma(devices)
-		if len(idents) > 0 {
-			// "devices" may contain machine IPs and/or machine names — resolve
-			// both to machine_ip so callers can filter by either.
-			wanted := make(map[string]bool, len(idents))
-			for _, id := range idents {
-				wanted[id] = true
-			}
-			ipSet := make(map[string]bool)
-			for _, m := range allMachines {
-				if wanted[m.MachineIP] || wanted[m.MachineName] {
-					ipSet[m.MachineIP] = true
-				}
-			}
-			ips := make([]string, 0, len(ipSet))
-			for ip := range ipSet {
-				ips = append(ips, ip)
-			}
-			query = query.Where("machine_ip IN ?", ips)
-		}
+		query = applyDeviceFilter(query, devices, allMachines)
 	}
 
 	var logs []models.TempLog
 	if err := query.Order("insert_time ASC").Find(&logs).Error; err != nil {
 		utils.LogError("GetTempLogReport failed: %v", err)
 		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
+	}
+
+	if includeArchive {
+		archived, err := fetchArchivedTempLogs(startDate, endDate, devices, allMachines)
+		if err != nil {
+			utils.LogError("GetTempLogReport - archive fetch failed: %v", err)
+		} else {
+			logs = mergeTempLogs(logs, archived, false, 0)
+		}
 	}
 
 	type SeriesPoint struct {
@@ -368,6 +383,65 @@ func GetTempErrors(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
 	}
 	return c.JSON(errors)
+}
+
+// RunArchiveHandler manually triggers an archive run (moves temp_log rows
+// older than the retention window into local JSON files).
+func RunArchiveHandler(c *fiber.Ctx) error {
+	if services.GlobalArchiveService == nil {
+		return c.Status(503).JSON(fiber.Map{"error": "archive service not ready"})
+	}
+	result, err := services.GlobalArchiveService.RunArchive()
+	if err != nil {
+		utils.LogError("RunArchiveHandler failed: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
+	}
+	return c.JSON(result)
+}
+
+// GetArchiveManifests lists archived-day entries, optionally filtered by
+// startDate/endDate (YYYY-MM-DD, inclusive).
+func GetArchiveManifests(c *fiber.Ctx) error {
+	startDate := c.Query("startDate")
+	endDate := c.Query("endDate")
+
+	query := database.DB.Model(&models.ArchiveManifest{}).Where("source_table = ?", "temp_log")
+	if startDate != "" && endDate != "" {
+		query = query.Where("period_date BETWEEN ? AND ?", startDate, endDate)
+	}
+
+	var manifests []models.ArchiveManifest
+	if err := query.Order("period_date DESC").Find(&manifests).Error; err != nil {
+		utils.LogError("GetArchiveManifests failed: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
+	}
+	return c.JSON(manifests)
+}
+
+// RestoreArchiveHandler loads archived temp_log data for a date range from
+// local files into temp_log_archive, so it can be included in reports.
+func RestoreArchiveHandler(c *fiber.Ctx) error {
+	startDate := c.Query("startDate")
+	endDate := c.Query("endDate")
+	if startDate == "" || endDate == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "startDate and endDate are required"})
+	}
+	if _, err := time.Parse("2006-01-02", startDate); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid startDate format, use YYYY-MM-DD"})
+	}
+	if _, err := time.Parse("2006-01-02", endDate); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "invalid endDate format, use YYYY-MM-DD"})
+	}
+
+	if services.GlobalArchiveService == nil {
+		return c.Status(503).JSON(fiber.Map{"error": "archive service not ready"})
+	}
+	result, err := services.GlobalArchiveService.RestoreRange(startDate, endDate)
+	if err != nil {
+		utils.LogError("RestoreArchiveHandler failed: %v", err)
+		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
+	}
+	return c.JSON(result)
 }
 
 func TriggerPoll(c *fiber.Ctx) error {
@@ -441,6 +515,124 @@ func splitComma(s string) []string {
 		return []string{}
 	}
 	return strings.Split(s, ",")
+}
+
+// applyDeviceFilter parses a comma-separated "devices" query param where each
+// token is "ident" or "ident:probeNo" (ident = machine_ip or machine_name).
+// A bare ident matches all probes of that device; an "ident:probeNo" token
+// narrows to that single probe. Both forms may be mixed in one param.
+func applyDeviceFilter(query *gorm.DB, devicesParam string, allMachines []models.MasterMachine) *gorm.DB {
+	plainIPs := make(map[string]bool)
+	type devicePair struct {
+		ip      string
+		probeNo int
+	}
+	var pairs []devicePair
+
+	for _, token := range splitComma(devicesParam) {
+		ident, probeNoStr, hasProbe := strings.Cut(token, ":")
+		var probeNo int
+		if hasProbe {
+			var err error
+			probeNo, err = strconv.Atoi(probeNoStr)
+			if err != nil {
+				continue // skip malformed "ident:probeNo" token
+			}
+		}
+
+		for _, m := range allMachines {
+			if m.MachineIP == ident || m.MachineName == ident {
+				if hasProbe {
+					pairs = append(pairs, devicePair{ip: m.MachineIP, probeNo: probeNo})
+				} else {
+					plainIPs[m.MachineIP] = true
+				}
+			}
+		}
+	}
+
+	ips := make([]string, 0, len(plainIPs))
+	for ip := range plainIPs {
+		ips = append(ips, ip)
+	}
+
+	if len(ips) == 0 && len(pairs) == 0 {
+		// No identifiers resolved (empty or entirely invalid filter) — match nothing,
+		// consistent with passing an empty slice to "machine_ip IN (?)".
+		return query.Where("1 = 0")
+	}
+
+	var clauses []string
+	var args []any
+	if len(ips) > 0 {
+		clauses = append(clauses, "machine_ip IN ?")
+		args = append(args, ips)
+	}
+	for _, p := range pairs {
+		clauses = append(clauses, "(machine_ip = ? AND probe_no = ?)")
+		args = append(args, p.ip, p.probeNo)
+	}
+	return query.Where(strings.Join(clauses, " OR "), args...)
+}
+
+// fetchArchivedTempLogs restores (if needed) and queries archived temp_log
+// data for [startDate, endDate] from temp_log_archive, applying the same
+// device filter as the live-table query, and returns it in TempLog shape so
+// it can be merged with live rows.
+func fetchArchivedTempLogs(startDate, endDate, devices string, allMachines []models.MasterMachine) ([]models.TempLog, error) {
+	if services.GlobalArchiveService != nil {
+		if _, err := services.GlobalArchiveService.RestoreRange(startDate, endDate); err != nil {
+			return nil, err
+		}
+	}
+
+	query := database.DB.Model(&models.TempLogArchive{}).
+		Where("insert_time BETWEEN ? AND ?", startDate+" 00:00:00", endDate+" 23:59:59")
+	if devices != "" {
+		query = applyDeviceFilter(query, devices, allMachines)
+	}
+
+	var archived []models.TempLogArchive
+	if err := query.Order("insert_time ASC").Find(&archived).Error; err != nil {
+		return nil, err
+	}
+
+	logs := make([]models.TempLog, len(archived))
+	for i, a := range archived {
+		logs[i] = models.TempLog{
+			MachineIP:  a.MachineIP,
+			ProbeNo:    a.ProbeNo,
+			McuID:      a.McuID,
+			TempValue:  a.TempValue,
+			RealValue:  a.RealValue,
+			Status:     a.Status,
+			SendTime:   a.SendTime,
+			InsertTime: a.InsertTime,
+			SDate:      a.SDate,
+			STime:      a.STime,
+		}
+	}
+	return logs, nil
+}
+
+// mergeTempLogs combines live and archived rows, sorts by insert time
+// (descending if `descending`, ascending otherwise), and applies limit if > 0.
+func mergeTempLogs(live, archived []models.TempLog, descending bool, limit int) []models.TempLog {
+	all := make([]models.TempLog, 0, len(live)+len(archived))
+	all = append(all, live...)
+	all = append(all, archived...)
+
+	sort.Slice(all, func(i, j int) bool {
+		if descending {
+			return all[i].InsertTime.After(all[j].InsertTime)
+		}
+		return all[i].InsertTime.Before(all[j].InsertTime)
+	})
+
+	if limit > 0 && len(all) > limit {
+		all = all[:limit]
+	}
+	return all
 }
 
 func isValidHHmm(s string) bool {

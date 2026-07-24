@@ -26,6 +26,15 @@ func init() {
 	}
 }
 
+// DefaultTCPPort returns the port the polling service dials every probe on.
+// Exposed so callers (e.g. the e2e suite) that need to know the real value
+// don't have to re-read DEFAULT_TCP_PORT themselves — env vars are only
+// applied here at package init time, which runs before any in-process .env
+// loading in main()/TestMain.
+func DefaultTCPPort() int {
+	return defaultTCPPort
+}
+
 type DataSavedEvent struct {
 	Saved  int `json:"saved"`
 	Errors int `json:"errors"`

@@ -27,38 +27,12 @@ import (
 
 // ── test app factory ──────────────────────────────────────────────────────────
 
-// newTestApp constructs a Fiber app that mirrors the routes in main.go, without
-// the system tray, MQTT, or TCP polling dependencies.
+// newTestApp constructs a Fiber app using the same route table as main.go
+// (via handlers.RegisterRoutes), without the system tray, MQTT, or TCP
+// polling dependencies.
 func newTestApp() *fiber.App {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-
-	// Health — reproduced from main.go
-	app.Get("/health", func(c *fiber.Ctx) error {
-		dbOK := false
-		if sqlDB, err := database.DB.DB(); err == nil {
-			dbOK = sqlDB.Ping() == nil
-		}
-		mqttOK := services.GlobalMQTTService != nil && services.GlobalMQTTService.IsConnected()
-		status, code := "ok", 200
-		if !dbOK {
-			status, code = "degraded", 503
-		}
-		return c.Status(code).JSON(fiber.Map{"status": status, "db": dbOK, "mqtt": mqttOK})
-	})
-
-	api := app.Group("/api")
-	api.Get("/devices", handlers.GetDevices)
-	api.Get("/devices/:id", handlers.GetDevice)
-	api.Post("/devices", handlers.CreateDevice)
-	api.Put("/devices/:id", handlers.UpdateDevice)
-	api.Delete("/devices/:id", handlers.DeleteDevice)
-	api.Get("/machines", handlers.GetMachines)
-	api.Put("/machines/:machineIp/:probeNo", handlers.UpdateMachine)
-	api.Get("/temp-logs", handlers.GetTempLogs)
-	api.Get("/reports/templog", handlers.GetTempLogReport)
-	api.Get("/temp-errors", handlers.GetTempErrors)
-	api.Post("/poll", handlers.TriggerPoll)
-
+	handlers.RegisterRoutes(app)
 	return app
 }
 
@@ -568,6 +542,37 @@ func TestGetTempLogs_CustomLimit(t *testing.T) {
 	}
 }
 
+func TestGetTempLogs_DeviceFilter(t *testing.T) {
+	mock := testutil.SetupMockDB(t)
+	mock.ExpectQuery(`SELECT \* FROM .master_machine.`).
+		WillReturnRows(sqlmock.NewRows(testutil.MachineColumns))
+	mock.ExpectQuery(`SELECT \* FROM .temp_log.`).
+		WillReturnRows(sqlmock.NewRows(testutil.TempLogColumns))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/temp-logs?devices=192.168.1.10,192.168.1.11", nil)
+	resp := mustTest(t, newTestApp(), req)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 — body: %s", resp.StatusCode, bodyString(t, resp.Body))
+	}
+}
+
+func TestGetTempLogs_DeviceProbeFilter(t *testing.T) {
+	mock := testutil.SetupMockDB(t)
+	machineRows := sqlmock.NewRows(testutil.MachineColumns).
+		AddRow("192.168.1.10", 1, 2, "Room A", "FF5733", "1", "0", "1", "0", "0", "1", 18.0, 28.0, 0.0, "t").
+		AddRow("192.168.1.10", 2, 2, "Room A", "FF5733", "1", "0", "1", "0", "0", "1", 18.0, 28.0, 0.0, "h")
+	mock.ExpectQuery(`SELECT \* FROM .master_machine.`).WillReturnRows(machineRows)
+	mock.ExpectQuery(`SELECT \* FROM .temp_log.`).
+		WillReturnRows(sqlmock.NewRows(testutil.TempLogColumns))
+
+	// Only probe 1 of 192.168.1.10 should be requested — probe 2 filtered out.
+	req := httptest.NewRequest(http.MethodGet, "/api/temp-logs?devices=192.168.1.10:1", nil)
+	resp := mustTest(t, newTestApp(), req)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 — body: %s", resp.StatusCode, bodyString(t, resp.Body))
+	}
+}
+
 // ── GET /api/reports/templog ──────────────────────────────────────────────────
 
 func TestGetTempLogReport_MissingDates_Returns400(t *testing.T) {
@@ -640,6 +645,29 @@ func TestGetTempLogReport_DeviceFilter(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodGet,
 		"/api/reports/templog?startDate=2024-01-01&endDate=2024-01-31&devices=192.168.1.10,192.168.1.11",
+		nil,
+	)
+	resp := mustTest(t, newTestApp(), req)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 — body: %s", resp.StatusCode, bodyString(t, resp.Body))
+	}
+}
+
+func TestGetTempLogReport_DeviceProbeFilter(t *testing.T) {
+	mock := testutil.SetupMockDB(t)
+	// GORM wraps the WHERE in parens when combining conditions, so use a loose pattern.
+	mock.ExpectQuery(`SELECT \* FROM .temp_log.`).
+		WillReturnRows(sqlmock.NewRows(testutil.TempLogColumns))
+	machineRows := sqlmock.NewRows(testutil.MachineColumns).
+		AddRow("192.168.1.10", 1, 2, "Room A", "FF5733", "1", "0", "1", "0", "0", "1", 18.0, 28.0, 0.0, "t").
+		AddRow("192.168.1.10", 2, 2, "Room A", "FF5733", "1", "0", "1", "0", "0", "1", 18.0, 28.0, 0.0, "h").
+		AddRow("192.168.1.11", 1, 1, "Room B", "00FF00", "1", "0", "1", "0", "0", "1", 18.0, 28.0, 0.0, "t")
+	mock.ExpectQuery(`SELECT \* FROM .master_machine.`).WillReturnRows(machineRows)
+
+	// Probe 1 only for 192.168.1.10 (mixed with a bare device for 192.168.1.11 — all its probes).
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/reports/templog?startDate=2024-01-01&endDate=2024-01-31&devices=192.168.1.10:1,192.168.1.11",
 		nil,
 	)
 	resp := mustTest(t, newTestApp(), req)
@@ -794,6 +822,132 @@ func TestMachineWithStatusShape(t *testing.T) {
 		if _, ok := raw[0][k]; !ok {
 			t.Errorf("/api/machines response missing key %q", k)
 		}
+	}
+}
+
+// ── POST /api/archive/run ─────────────────────────────────────────────────────
+
+func TestRunArchiveHandler_ServiceNil_Returns503(t *testing.T) {
+	testutil.SetupMockDB(t)
+	prev := services.GlobalArchiveService
+	services.GlobalArchiveService = nil
+	t.Cleanup(func() { services.GlobalArchiveService = prev })
+
+	resp := mustTest(t, newTestApp(), httptest.NewRequest(http.MethodPost, "/api/archive/run", nil))
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+}
+
+func TestRunArchiveHandler_NoArchivableDays_Returns200(t *testing.T) {
+	mock := testutil.SetupMockDB(t)
+	// RunArchive's day-listing query returns no rows -> nothing further happens.
+	mock.ExpectQuery(`SELECT DISTINCT DATE_FORMAT`).
+		WillReturnRows(sqlmock.NewRows([]string{"day"}))
+
+	prev := services.GlobalArchiveService
+	services.GlobalArchiveService = services.NewArchiveService()
+	t.Cleanup(func() { services.GlobalArchiveService = prev })
+
+	resp := mustTest(t, newTestApp(), httptest.NewRequest(http.MethodPost, "/api/archive/run", nil))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — %s", resp.StatusCode, bodyString(t, resp.Body))
+	}
+
+	var result struct {
+		DaysArchived int `json:"daysArchived"`
+		RowsArchived int `json:"rowsArchived"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result.DaysArchived != 0 || result.RowsArchived != 0 {
+		t.Errorf("result = %+v, want zero", result)
+	}
+}
+
+// ── GET /api/archive ──────────────────────────────────────────────────────────
+
+func TestGetArchiveManifests_ReturnsList(t *testing.T) {
+	mock := testutil.SetupMockDB(t)
+	rows := sqlmock.NewRows(testutil.ArchiveManifestColumns).
+		AddRow(1, "temp_log", "2026-01-10", "archives/temp_log/2026/01/temp_log_2026-01-10.json", 42, time.Now())
+	mock.ExpectQuery(`SELECT \* FROM .archive_manifest.`).WillReturnRows(rows)
+
+	resp := mustTest(t, newTestApp(), httptest.NewRequest(http.MethodGet, "/api/archive", nil))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — %s", resp.StatusCode, bodyString(t, resp.Body))
+	}
+
+	var manifests []models.ArchiveManifest
+	json.NewDecoder(resp.Body).Decode(&manifests)
+	if len(manifests) != 1 || manifests[0].PeriodDate != "2026-01-10" {
+		t.Errorf("manifests = %+v", manifests)
+	}
+}
+
+func TestGetArchiveManifests_DBError_Returns500(t *testing.T) {
+	mock := testutil.SetupMockDB(t)
+	mock.ExpectQuery(`SELECT \* FROM .archive_manifest.`).WillReturnError(errDB)
+
+	resp := mustTest(t, newTestApp(), httptest.NewRequest(http.MethodGet, "/api/archive", nil))
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", resp.StatusCode)
+	}
+}
+
+// ── POST /api/archive/restore ─────────────────────────────────────────────────
+
+func TestRestoreArchiveHandler_MissingDates_Returns400(t *testing.T) {
+	testutil.SetupMockDB(t)
+	resp := mustTest(t, newTestApp(), httptest.NewRequest(http.MethodPost, "/api/archive/restore", nil))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestRestoreArchiveHandler_InvalidDateFormat_Returns400(t *testing.T) {
+	testutil.SetupMockDB(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/archive/restore?startDate=10-01-2026&endDate=2026-01-10", nil)
+	resp := mustTest(t, newTestApp(), req)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestRestoreArchiveHandler_ServiceNil_Returns503(t *testing.T) {
+	testutil.SetupMockDB(t)
+	prev := services.GlobalArchiveService
+	services.GlobalArchiveService = nil
+	t.Cleanup(func() { services.GlobalArchiveService = prev })
+
+	req := httptest.NewRequest(http.MethodPost, "/api/archive/restore?startDate=2026-01-01&endDate=2026-01-10", nil)
+	resp := mustTest(t, newTestApp(), req)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+}
+
+func TestRestoreArchiveHandler_NoManifests_Returns200(t *testing.T) {
+	mock := testutil.SetupMockDB(t)
+	mock.ExpectQuery(`SELECT \* FROM .archive_manifest.`).
+		WillReturnRows(sqlmock.NewRows(testutil.ArchiveManifestColumns))
+
+	prev := services.GlobalArchiveService
+	services.GlobalArchiveService = services.NewArchiveService()
+	t.Cleanup(func() { services.GlobalArchiveService = prev })
+
+	req := httptest.NewRequest(http.MethodPost, "/api/archive/restore?startDate=2026-01-01&endDate=2026-01-10", nil)
+	resp := mustTest(t, newTestApp(), req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — %s", resp.StatusCode, bodyString(t, resp.Body))
+	}
+
+	var result struct {
+		DaysRestored int `json:"daysRestored"`
+		RowsRestored int `json:"rowsRestored"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result.DaysRestored != 0 || result.RowsRestored != 0 {
+		t.Errorf("result = %+v, want zero", result)
 	}
 }
 

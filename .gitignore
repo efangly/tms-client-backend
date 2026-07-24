@@ -30,6 +30,8 @@ go.work
 .env.local
 .env.*.local
 .env.example
+.env.e2e
+.env.e2e.example
 
 # IDE
 .vscode/

@@ -101,6 +101,9 @@ func startServer() {
 	log.Println("Initializing polling service...")
 	services.GlobalPollingService = services.NewPollingService()
 
+	// Initialize Archive service (moves old temp_log rows to local files)
+	services.GlobalArchiveService = services.NewArchiveService()
+
 	// Initialize Fiber app
 	fiberApp = fiber.New(fiber.Config{
 		AppName:               "TMS Backend API",
@@ -111,56 +114,16 @@ func startServer() {
 	fiberApp.Use(fiberlogger.New())
 	fiberApp.Use(cors.New())
 
-	// Health check — includes dependency status
-	fiberApp.Get("/health", func(c *fiber.Ctx) error {
-		dbOK := false
-		if sqlDB, err := database.DB.DB(); err == nil {
-			dbOK = sqlDB.Ping() == nil
-		}
-		mqttOK := services.GlobalMQTTService != nil && services.GlobalMQTTService.IsConnected()
-		status, code := "ok", 200
-		if !dbOK {
-			status, code = "degraded", 503
-		}
-		return c.Status(code).JSON(fiber.Map{"status": status, "db": dbOK, "mqtt": mqttOK})
-	})
-
-	// API routes
-	api := fiberApp.Group("/api")
-
-	// Device routes
-	api.Get("/devices", handlers.GetDevices)
-	api.Get("/devices/:id", handlers.GetDevice)
-	api.Post("/devices", handlers.CreateDevice)
-	api.Put("/devices/:id", handlers.UpdateDevice)
-	api.Delete("/devices/:id", handlers.DeleteDevice)
-
-	// Machine routes (legacy compatibility)
-	api.Get("/machines", handlers.GetMachines)
-	api.Put("/machines/:machineIp/:probeNo", handlers.UpdateMachine)
-
-	// Schedule routes (stored in color field of master_machine)
-	api.Get("/machines/:machineIp/:probeNo/schedule", handlers.GetSchedule)
-	api.Put("/machines/:machineIp/:probeNo/schedule", handlers.SetSchedule)
-	api.Post("/machines/:machineIp/:probeNo/schedule/:time", handlers.AddScheduleTime)
-	api.Delete("/machines/:machineIp/:probeNo/schedule/:time", handlers.RemoveScheduleTime)
-
-	// Temperature logs
-	api.Get("/temp-logs", handlers.GetTempLogs)
-	api.Get("/reports/templog", handlers.GetTempLogReport)
-
-	// Temperature errors
-	api.Get("/temp-errors", handlers.GetTempErrors)
-
-	// Polling control (POST — triggers a state change)
-	api.Post("/poll", handlers.TriggerPoll)
-
-	// SSE for real-time updates
-	api.Get("/temperature-stream", handlers.TemperatureStream)
+	// Routes (including /health) — shared with tests via handlers.RegisterRoutes
+	handlers.RegisterRoutes(fiberApp)
 
 	// Start polling service
 	log.Println("Starting polling service...")
 	go services.GlobalPollingService.Start()
+
+	// Start archive service
+	log.Println("Starting archive service...")
+	go services.GlobalArchiveService.Start()
 
 	// Start server
 	port := os.Getenv("PORT")
@@ -194,6 +157,9 @@ func cleanup() {
 
 	if services.GlobalPollingService != nil {
 		services.GlobalPollingService.Stop()
+	}
+	if services.GlobalArchiveService != nil {
+		services.GlobalArchiveService.Stop()
 	}
 	if services.GlobalMQTTService != nil {
 		services.GlobalMQTTService.Disconnect()
