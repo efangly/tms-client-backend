@@ -282,7 +282,6 @@ func GetTempLogReport(c *fiber.Ctx) error {
 	startDate := c.Query("startDate")
 	endDate := c.Query("endDate")
 	devices := c.Query("devices") // comma-separated machine IPs or machine names
-	includeArchive := c.QueryBool("includeArchive", false)
 
 	if startDate == "" || endDate == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "startDate and endDate are required"})
@@ -294,6 +293,12 @@ func GetTempLogReport(c *fiber.Ctx) error {
 	if _, err := time.Parse("2006-01-02", endDate); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid endDate format, use YYYY-MM-DD"})
 	}
+
+	// Archive data is pulled in automatically once the requested range reaches
+	// back past the retention window — the caller no longer needs to ask for
+	// it explicitly, matching the point where data actually leaves temp_log.
+	cutoff := database.GetThailandTime().AddDate(0, 0, -services.RetentionDays()).Format("2006-01-02")
+	needsArchive := startDate < cutoff
 
 	var allMachines []models.MasterMachine
 	if err := database.DB.Find(&allMachines).Error; err != nil {
@@ -321,7 +326,7 @@ func GetTempLogReport(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "internal server error"})
 	}
 
-	if includeArchive {
+	if needsArchive {
 		archived, err := fetchArchivedTempLogs(startDate, endDate, devices, allMachines)
 		if err != nil {
 			utils.LogError("GetTempLogReport - archive fetch failed: %v", err)

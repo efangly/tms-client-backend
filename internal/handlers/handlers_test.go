@@ -603,13 +603,13 @@ func TestGetTempLogReport_InvalidDateFormat_Returns400(t *testing.T) {
 
 func TestGetTempLogReport_Success(t *testing.T) {
 	mock := testutil.SetupMockDB(t)
-	insertTime := time.Date(2024, 1, 15, 14, 30, 0, 0, time.UTC)
+	insertTime := database.GetThailandTime().AddDate(0, 0, -1)
 	tempVal := 22.5
 	realVal := 2250
 	status := "N"
 
 	logRows := sqlmock.NewRows(testutil.TempLogColumns).
-		AddRow("192.168.1.10", 1, "Room A", tempVal, realVal, status, insertTime, insertTime, "20240115", "14")
+		AddRow("192.168.1.10", 1, "Room A", tempVal, realVal, status, insertTime, insertTime, insertTime.Format("20060102"), "14")
 	mock.ExpectQuery(`SELECT \* FROM .temp_log. WHERE insert_time BETWEEN`).
 		WillReturnRows(logRows)
 
@@ -617,7 +617,12 @@ func TestGetTempLogReport_Success(t *testing.T) {
 		AddRow("192.168.1.10", 1, 4, "Room A", "FF5733", "1", "0", "1", "0", "0", "1", 18.0, 28.0, 0.0, "t")
 	mock.ExpectQuery(`SELECT \* FROM .master_machine.`).WillReturnRows(machineRows)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/reports/templog?startDate=2024-01-01&endDate=2024-01-31", nil)
+	// Recent range (within the retention window) so the report reads live
+	// temp_log only and does not trigger the archive auto-fetch path.
+	today := database.GetThailandTime()
+	startDate := today.AddDate(0, 0, -2).Format("2006-01-02")
+	endDate := today.Format("2006-01-02")
+	req := httptest.NewRequest(http.MethodGet, "/api/reports/templog?startDate="+startDate+"&endDate="+endDate, nil)
 	resp := mustTest(t, newTestApp(), req)
 
 	if resp.StatusCode != http.StatusOK {
@@ -642,9 +647,13 @@ func TestGetTempLogReport_DeviceFilter(t *testing.T) {
 	mock.ExpectQuery(`SELECT \* FROM .master_machine.`).
 		WillReturnRows(sqlmock.NewRows(testutil.MachineColumns))
 
+	// Recent range so the report doesn't also trigger the archive auto-fetch path.
+	today := database.GetThailandTime()
+	startDate := today.AddDate(0, 0, -2).Format("2006-01-02")
+	endDate := today.Format("2006-01-02")
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/api/reports/templog?startDate=2024-01-01&endDate=2024-01-31&devices=192.168.1.10,192.168.1.11",
+		"/api/reports/templog?startDate="+startDate+"&endDate="+endDate+"&devices=192.168.1.10,192.168.1.11",
 		nil,
 	)
 	resp := mustTest(t, newTestApp(), req)
@@ -664,15 +673,49 @@ func TestGetTempLogReport_DeviceProbeFilter(t *testing.T) {
 		AddRow("192.168.1.11", 1, 1, "Room B", "00FF00", "1", "0", "1", "0", "0", "1", 18.0, 28.0, 0.0, "t")
 	mock.ExpectQuery(`SELECT \* FROM .master_machine.`).WillReturnRows(machineRows)
 
+	// Recent range so the report doesn't also trigger the archive auto-fetch path.
+	today := database.GetThailandTime()
+	startDate := today.AddDate(0, 0, -2).Format("2006-01-02")
+	endDate := today.Format("2006-01-02")
+
 	// Probe 1 only for 192.168.1.10 (mixed with a bare device for 192.168.1.11 — all its probes).
 	req := httptest.NewRequest(
 		http.MethodGet,
-		"/api/reports/templog?startDate=2024-01-01&endDate=2024-01-31&devices=192.168.1.10:1,192.168.1.11",
+		"/api/reports/templog?startDate="+startDate+"&endDate="+endDate+"&devices=192.168.1.10:1,192.168.1.11",
 		nil,
 	)
 	resp := mustTest(t, newTestApp(), req)
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200 — body: %s", resp.StatusCode, bodyString(t, resp.Body))
+	}
+}
+
+// TestGetTempLogReport_OldRange_FetchesArchive verifies that a startDate
+// older than the retention window automatically triggers the archive
+// restore + query path, with no includeArchive param involved.
+func TestGetTempLogReport_OldRange_FetchesArchive(t *testing.T) {
+	mock := testutil.SetupMockDB(t)
+
+	prev := services.GlobalArchiveService
+	services.GlobalArchiveService = nil // skip RestoreRange, go straight to querying temp_log_archive
+	t.Cleanup(func() { services.GlobalArchiveService = prev })
+
+	mock.ExpectQuery(`SELECT \* FROM .master_machine.`).
+		WillReturnRows(sqlmock.NewRows(testutil.MachineColumns))
+	mock.ExpectQuery(`SELECT \* FROM .temp_log. WHERE insert_time BETWEEN`).
+		WillReturnRows(sqlmock.NewRows(testutil.TempLogColumns))
+	mock.ExpectQuery(`SELECT \* FROM .temp_log_archive.`).
+		WillReturnRows(sqlmock.NewRows(testutil.TempLogArchiveColumns))
+
+	startDate := database.GetThailandTime().AddDate(0, 0, -(services.RetentionDays() + 5)).Format("2006-01-02")
+	endDate := database.GetThailandTime().Format("2006-01-02")
+	req := httptest.NewRequest(http.MethodGet, "/api/reports/templog?startDate="+startDate+"&endDate="+endDate, nil)
+	resp := mustTest(t, newTestApp(), req)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — body: %s", resp.StatusCode, bodyString(t, resp.Body))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet DB expectations: %v", err)
 	}
 }
 
@@ -930,6 +973,9 @@ func TestRestoreArchiveHandler_NoManifests_Returns200(t *testing.T) {
 	mock := testutil.SetupMockDB(t)
 	mock.ExpectQuery(`SELECT \* FROM .archive_manifest.`).
 		WillReturnRows(sqlmock.NewRows(testutil.ArchiveManifestColumns))
+	mock.ExpectBegin()
+	mock.ExpectExec(`DELETE FROM .temp_log_archive.`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
 
 	prev := services.GlobalArchiveService
 	services.GlobalArchiveService = services.NewArchiveService()

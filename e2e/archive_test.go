@@ -114,4 +114,47 @@ func TestArchiveRunAndRestore(t *testing.T) {
 	if len(restoredRows) != 1 || restoredRows[0].TempValue == nil || *restoredRows[0].TempValue != 4.5 {
 		t.Fatalf("temp_log_archive rows = %+v, want one row with TempValue 4.5", restoredRows)
 	}
+
+	// The report/chart endpoint auto-detects that the range reaches back past
+	// the retention window and includes the archived row, with no
+	// includeArchive param at all.
+	resp, body = doRequest(t, http.MethodGet, "/api/reports/templog?startDate="+day+"&endDate="+day, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get report: status = %d, body = %s", resp.StatusCode, body)
+	}
+	var report struct {
+		Data []models.TempLog `json:"data"`
+	}
+	if err := json.Unmarshal(body, &report); err != nil {
+		t.Fatalf("unmarshal report result: %v", err)
+	}
+	if len(report.Data) != 1 || report.Data[0].MachineIP != "10.20.30.5" {
+		t.Fatalf("report data = %+v, want the archived row for 10.20.30.5", report.Data)
+	}
+
+	// Restoring a different range with no matching manifest clears
+	// temp_log_archive rather than leaving the previous call's row behind.
+	otherDay := oldTime.AddDate(0, 0, -1).Format("2006-01-02")
+	resp, body = doRequest(t, http.MethodPost, "/api/archive/restore?startDate="+otherDay+"&endDate="+otherDay, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("archive/restore (other range): status = %d, body = %s", resp.StatusCode, body)
+	}
+	var otherRestoreResult struct {
+		DaysRestored int `json:"daysRestored"`
+		RowsRestored int `json:"rowsRestored"`
+	}
+	if err := json.Unmarshal(body, &otherRestoreResult); err != nil {
+		t.Fatalf("unmarshal archive/restore (other range) result: %v", err)
+	}
+	if otherRestoreResult.DaysRestored != 0 || otherRestoreResult.RowsRestored != 0 {
+		t.Fatalf("archive/restore (other range) result = %+v, want zero (no manifest for %s)", otherRestoreResult, otherDay)
+	}
+
+	var afterClear []models.TempLogArchive
+	if err := database.DB.Where("machine_ip = ?", "10.20.30.5").Find(&afterClear).Error; err != nil {
+		t.Fatalf("query temp_log_archive after second restore: %v", err)
+	}
+	if len(afterClear) != 0 {
+		t.Fatalf("temp_log_archive rows after restoring an unrelated range = %+v, want none (previous restore's data must be cleared)", afterClear)
+	}
 }

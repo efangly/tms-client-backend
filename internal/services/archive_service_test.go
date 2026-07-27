@@ -244,6 +244,7 @@ func TestRestoreRange_LoadsArchivedFileIntoTable(t *testing.T) {
 	mock.ExpectQuery(`SELECT \* FROM .archive_manifest.`).WillReturnRows(manifestRows)
 
 	mock.ExpectBegin()
+	mock.ExpectExec(`DELETE FROM .temp_log_archive.`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO .temp_log_archive.`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -268,6 +269,10 @@ func TestRestoreRange_MissingFile_SkipsWithoutError(t *testing.T) {
 		AddRow(1, "temp_log", "2026-01-10", filepath.Join(archiveDir, "missing.json"), 1, time.Now())
 	mock.ExpectQuery(`SELECT \* FROM .archive_manifest.`).WillReturnRows(manifestRows)
 
+	mock.ExpectBegin()
+	mock.ExpectExec(`DELETE FROM .temp_log_archive.`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
 	svc := NewArchiveService()
 	result, err := svc.RestoreRange("2026-01-10", "2026-01-10")
 	if err != nil {
@@ -284,6 +289,10 @@ func TestRestoreRange_NoManifests_ReturnsZero(t *testing.T) {
 	mock.ExpectQuery(`SELECT \* FROM .archive_manifest.`).
 		WillReturnRows(sqlmock.NewRows(testutil.ArchiveManifestColumns))
 
+	mock.ExpectBegin()
+	mock.ExpectExec(`DELETE FROM .temp_log_archive.`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
 	svc := NewArchiveService()
 	result, err := svc.RestoreRange("2026-01-01", "2026-01-31")
 	if err != nil {
@@ -291,6 +300,64 @@ func TestRestoreRange_NoManifests_ReturnsZero(t *testing.T) {
 	}
 	if result.DaysRestored != 0 || result.RowsRestored != 0 {
 		t.Errorf("result = %+v, want zero", result)
+	}
+}
+
+func TestRestoreRange_ClearsPreviousDataOnEachCall(t *testing.T) {
+	withTempArchiveDir(t)
+	mock := testutil.SetupMockDB(t)
+
+	day := "2026-01-10"
+	archived := []models.TempLogArchive{{
+		MachineIP:  "192.168.1.10",
+		ProbeNo:    1,
+		TempValue:  floatPtr(25.5),
+		InsertTime: mustParseTime(t, day+" 08:00:00"),
+	}}
+	data, err := json.Marshal(archived)
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+	dir := filepath.Join(archiveDir, "temp_log", "2026", "01")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir fixture dir: %v", err)
+	}
+	filePath := filepath.Join(dir, "temp_log_2026-01-10.json")
+	if err := os.WriteFile(filePath, data, 0644); err != nil {
+		t.Fatalf("write fixture file: %v", err)
+	}
+
+	manifestRows := sqlmock.NewRows(testutil.ArchiveManifestColumns).
+		AddRow(1, "temp_log", day, filePath, 1, time.Now())
+
+	svc := NewArchiveService()
+
+	// First call: finds the manifest, clears the (empty) table, then inserts.
+	mock.ExpectQuery(`SELECT \* FROM .archive_manifest.`).WillReturnRows(manifestRows)
+	mock.ExpectBegin()
+	mock.ExpectExec(`DELETE FROM .temp_log_archive.`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`INSERT INTO .temp_log_archive.`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	if _, err := svc.RestoreRange(day, day); err != nil {
+		t.Fatalf("first RestoreRange: %v", err)
+	}
+
+	// Second call for a range with no manifests: must still clear the table,
+	// leaving it empty rather than holding the first call's row.
+	mock.ExpectQuery(`SELECT \* FROM .archive_manifest.`).
+		WillReturnRows(sqlmock.NewRows(testutil.ArchiveManifestColumns))
+	mock.ExpectBegin()
+	mock.ExpectExec(`DELETE FROM .temp_log_archive.`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	result, err := svc.RestoreRange("2026-02-01", "2026-02-28")
+	if err != nil {
+		t.Fatalf("second RestoreRange: %v", err)
+	}
+	if result.DaysRestored != 0 || result.RowsRestored != 0 {
+		t.Errorf("result = %+v, want zero for a range with no manifests", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet DB expectations: %v", err)
 	}
 }
 

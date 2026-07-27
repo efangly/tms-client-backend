@@ -50,6 +50,14 @@ func ArchiveDir() string {
 	return archiveDir
 }
 
+// RetentionDays returns the number of days temp_log data is kept before being
+// archived out. Exposed so callers (e.g. handlers.GetTempLogReport) can
+// compute the archive cutoff without duplicating ARCHIVE_RETENTION_DAYS
+// parsing.
+func RetentionDays() int {
+	return archiveRetentionDays
+}
+
 // ArchiveResult summarizes the outcome of a RunArchive call.
 type ArchiveResult struct {
 	DaysArchived int `json:"daysArchived"`
@@ -257,6 +265,12 @@ func (a *ArchiveService) archiveDay(day string) (int, error) {
 // RestoreRange loads archived temp_log data for [startDate, endDate] (each
 // YYYY-MM-DD) from local files into the temp_log_archive table, so report
 // endpoints can read it without touching the live temp_log table.
+//
+// temp_log_archive is cleared before every restore, so it only ever holds the
+// most recently restored range — it is not an accumulating cache across
+// calls. This keeps report/chart requests self-contained (no leftover data
+// from an earlier, different query) at the cost of safety under concurrent
+// restore calls, which is an accepted trade-off for this internal tool.
 func (a *ArchiveService) RestoreRange(startDate, endDate string) (RestoreResult, error) {
 	result := RestoreResult{}
 
@@ -266,6 +280,7 @@ func (a *ArchiveService) RestoreRange(startDate, endDate string) (RestoreResult,
 		return result, fmt.Errorf("failed to list manifests: %w", err)
 	}
 
+	var allRows []models.TempLogArchive
 	for _, m := range manifests {
 		data, err := os.ReadFile(m.FilePath)
 		if err != nil {
@@ -282,13 +297,21 @@ func (a *ArchiveService) RestoreRange(startDate, endDate string) (RestoreResult,
 			continue
 		}
 
-		if err := database.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error; err != nil {
-			log.Printf("archive restore: failed to insert rows for %s: %v", m.FilePath, err)
-			continue
-		}
-
+		allRows = append(allRows, rows...)
 		result.DaysRestored++
 		result.RowsRestored += len(rows)
+	}
+
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.TempLogArchive{}).Error; err != nil {
+			return err
+		}
+		if len(allRows) == 0 {
+			return nil
+		}
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&allRows).Error
+	}); err != nil {
+		return RestoreResult{}, fmt.Errorf("clear+restore temp_log_archive: %w", err)
 	}
 
 	return result, nil
