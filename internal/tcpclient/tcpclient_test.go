@@ -19,7 +19,7 @@ func round2(v float64) float64 { return math.Round(v*100) / 100 }
 //   raw = 0x19A3 = 6563 → temp = (6563-4000)*0.01 = 25.63 °C
 func TestOneProbe_NineBytes(t *testing.T) {
 	data := []byte{0x41, 0x41, 0x5a, 0x00, 0x5a, 0x19, 0xa3, 0x5a, 0x0d}
-	probes := parseHexResponse(data, "192.168.1.1")
+	probes := ParseHexResponse(data, "192.168.1.1")
 
 	if len(probes) != 1 {
 		t.Fatalf("expected 1 probe, got %d", len(probes))
@@ -43,7 +43,7 @@ func TestOneProbe_NineBytes(t *testing.T) {
 //   probe2 raw = 0x19AE = 6574 → 25.74 °C
 func TestTwoProbes_TwelveBytes(t *testing.T) {
 	data := []byte{0x41, 0x41, 0x5a, 0x03, 0x5a, 0x19, 0xa3, 0x5a, 0x19, 0xae, 0x5a, 0x0d}
-	probes := parseHexResponse(data, "192.168.1.1")
+	probes := ParseHexResponse(data, "192.168.1.1")
 
 	if len(probes) != 2 {
 		t.Fatalf("expected 2 probes, got %d", len(probes))
@@ -79,7 +79,7 @@ func TestTempHumidityTemp_FifteenBytes(t *testing.T) {
 		0x5a, 0x1a, 0x2c, // probe2 temp
 		0x5a, 0x0d, // tail
 	}
-	probes := parseHexResponse(data, "192.168.1.1")
+	probes := ParseHexResponse(data, "192.168.1.1")
 
 	if len(probes) != 3 {
 		t.Fatalf("expected 3 probes, got %d", len(probes))
@@ -112,7 +112,7 @@ func TestTempHumidityTemp_FifteenBytes(t *testing.T) {
 func TestTwoProbes_ProbeIndicator03(t *testing.T) {
 	// Same as 12-byte frame but verify probe indicator path triggers correctly.
 	data := []byte{0x41, 0x41, 0x5a, 0x03, 0x5a, 0x19, 0xa3, 0x5a, 0x19, 0xae, 0x5a, 0x0d}
-	probes := parseHexResponse(data, "192.168.1.1")
+	probes := ParseHexResponse(data, "192.168.1.1")
 	if len(probes) != 2 {
 		t.Fatalf("probe indicator 0x03: expected 2 probes, got %d", len(probes))
 	}
@@ -121,7 +121,7 @@ func TestTwoProbes_ProbeIndicator03(t *testing.T) {
 // TestInvalidHeader returns empty probes when the magic bytes are wrong.
 func TestInvalidHeader(t *testing.T) {
 	data := []byte{0xFF, 0xFE, 0x5a, 0x00, 0x5a, 0x19, 0xa3, 0x5a, 0x0d}
-	probes := parseHexResponse(data, "192.168.1.1")
+	probes := ParseHexResponse(data, "192.168.1.1")
 	if len(probes) != 0 {
 		t.Errorf("invalid header: expected 0 probes, got %d", len(probes))
 	}
@@ -130,7 +130,7 @@ func TestInvalidHeader(t *testing.T) {
 // TestTooShort returns empty probes for frames shorter than the minimum 9 bytes.
 func TestTooShort(t *testing.T) {
 	short := []byte{0x41, 0x41, 0x5a, 0x00, 0x5a, 0x19}
-	probes := parseHexResponse(short, "192.168.1.1")
+	probes := ParseHexResponse(short, "192.168.1.1")
 	if len(probes) != 0 {
 		t.Errorf("too-short frame: expected 0 probes, got %d", len(probes))
 	}
@@ -141,7 +141,7 @@ func TestTooShort(t *testing.T) {
 // the sentinel value, not the parser.
 func TestBrokenSensor_RawValue65535(t *testing.T) {
 	data := []byte{0x41, 0x41, 0x5a, 0x00, 0x5a, 0xFF, 0xFF, 0x5a, 0x0d}
-	probes := parseHexResponse(data, "192.168.1.1")
+	probes := ParseHexResponse(data, "192.168.1.1")
 	if len(probes) != 1 {
 		t.Fatalf("expected 1 probe (broken sensor), got %d", len(probes))
 	}
@@ -153,7 +153,7 @@ func TestBrokenSensor_RawValue65535(t *testing.T) {
 // TestProbe1_BadSeparator returns empty probes when byte[4] isn't 0x5A.
 func TestProbe1_BadSeparator(t *testing.T) {
 	data := []byte{0x41, 0x41, 0x5a, 0x00, 0xBB, 0x19, 0xa3, 0x5a, 0x0d}
-	probes := parseHexResponse(data, "192.168.1.1")
+	probes := ParseHexResponse(data, "192.168.1.1")
 	if len(probes) != 0 {
 		t.Errorf("bad separator: expected 0 probes, got %d", len(probes))
 	}

@@ -97,6 +97,14 @@ func startServer() {
 		}
 	}
 
+	// Initialize Serial service (persistent connections to USB-attached
+	// probes, kept open from startup with auto-reconnect on drop)
+	log.Println("Initializing serial service...")
+	services.GlobalSerialService = services.NewSerialService()
+	if err := services.GlobalSerialService.Start(); err != nil {
+		log.Printf("Serial service start failed: %v (continuing without serial devices)", err)
+	}
+
 	// Initialize Polling service (after MQTT is ready)
 	log.Println("Initializing polling service...")
 	services.GlobalPollingService = services.NewPollingService()
@@ -160,6 +168,9 @@ func cleanup() {
 	}
 	if services.GlobalArchiveService != nil {
 		services.GlobalArchiveService.Stop()
+	}
+	if services.GlobalSerialService != nil {
+		services.GlobalSerialService.Stop()
 	}
 	if services.GlobalMQTTService != nil {
 		services.GlobalMQTTService.Disconnect()

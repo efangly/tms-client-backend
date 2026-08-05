@@ -12,6 +12,7 @@ import (
 
 	"tms-backend/internal/database"
 	"tms-backend/internal/models"
+	"tms-backend/internal/serialclient"
 	"tms-backend/internal/tcpclient"
 	"tms-backend/internal/utils"
 )
@@ -33,6 +34,39 @@ func init() {
 // loading in main()/TestMain.
 func DefaultTCPPort() int {
 	return defaultTCPPort
+}
+
+// requestProbes reads current probe values for a machine's configured
+// machine_ip. TCP-style IPs are dialed fresh via tcpclient, matching the
+// existing behavior. COM-style paths (e.g. "COM3") instead reuse the
+// persistent, auto-reconnecting connection that GlobalSerialService opened
+// at startup, since serial ports are held open rather than dialed per
+// request. Both paths return the same []tcpclient.ProbeData shape, parsed
+// by the identical hex protocol parser.
+func requestProbes(ip, command string, timeout time.Duration) []tcpclient.ProbeData {
+	if serialclient.IsSerialPath(ip) {
+		if GlobalSerialService == nil {
+			log.Printf("Serial %s: serial service not initialized, skipping", ip)
+			return nil
+		}
+		conn, ok := GlobalSerialService.GetConnection(ip)
+		if !ok {
+			log.Printf("Serial %s: no persistent connection tracked (added to master_machine after startup?)", ip)
+			return nil
+		}
+		response := conn.Request(command, timeout)
+		if response.Error != "" {
+			log.Printf("Serial %s: %s", ip, response.Error)
+		}
+		return response.Probes
+	}
+
+	response := tcpclient.RequestFromTCPServer(
+		tcpclient.ServerConfig{IP: ip, Port: defaultTCPPort},
+		command,
+		timeout,
+	)
+	return response.Probes
 }
 
 type DataSavedEvent struct {
@@ -396,18 +430,14 @@ func (p *PollingService) pollAndSave() {
 	for ip, probes := range machinesByIP {
 		machineName := probes[0].MachineName
 
-		response := tcpclient.RequestFromTCPServer(
-			tcpclient.ServerConfig{IP: ip, Port: defaultTCPPort, Name: machineName},
-			"A",
-			5*time.Second,
-		)
+		receivedProbes := requestProbes(ip, "A", 5*time.Second)
 
 		probeConfigs := make(map[int]models.MasterMachine)
 		for _, probe := range probes {
 			probeConfigs[probe.ProbeNo] = probe
 		}
 
-		for _, probeData := range response.Probes {
+		for _, probeData := range receivedProbes {
 			if probeData.RealValue == 65535 || probeData.RealValue == -1 {
 				log.Printf("Skipping broken sensor data: %s Probe %d (RealValue: 0x%04X)", probes[0].MachineName, probeData.ProbeNo, uint16(probeData.RealValue))
 				continue
@@ -533,20 +563,14 @@ func (p *PollingService) checkAlerts() {
 	now := database.GetThailandTime()
 
 	for ip, probes := range machinesByIP {
-		machineName := probes[0].MachineName
-
-		response := tcpclient.RequestFromTCPServer(
-			tcpclient.ServerConfig{IP: ip, Port: defaultTCPPort, Name: machineName},
-			"A",
-			3*time.Second,
-		)
+		receivedProbes := requestProbes(ip, "A", 3*time.Second)
 
 		probeConfigs := make(map[int]models.MasterMachine)
 		for _, probe := range probes {
 			probeConfigs[probe.ProbeNo] = probe
 		}
 
-		for _, probeData := range response.Probes {
+		for _, probeData := range receivedProbes {
 			if probeData.RealValue == 65535 || probeData.RealValue == -1 {
 				continue
 			}

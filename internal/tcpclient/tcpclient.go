@@ -57,9 +57,11 @@ func isProbeValueValid(p ProbeData) bool {
 	return p.TempValue >= minValidTemp && p.TempValue <= maxValidTemp
 }
 
-// filterValidProbes drops probes with out-of-range values, logging each one
-// so a sensor glitch is visible without failing the whole response.
-func filterValidProbes(probes []ProbeData, ip string) (valid []ProbeData, hasAnomaly bool) {
+// FilterValidProbes drops probes with out-of-range values, logging each one
+// so a sensor glitch is visible without failing the whole response. Exported
+// so other transports (e.g. serialclient) that reuse ParseHexResponse can
+// apply the same anomaly filtering.
+func FilterValidProbes(probes []ProbeData, ip string) (valid []ProbeData, hasAnomaly bool) {
 	valid = make([]ProbeData, 0, len(probes))
 	for _, p := range probes {
 		if !isProbeValueValid(p) {
@@ -107,7 +109,7 @@ func requestOnce(config ServerConfig, command string, timeout time.Duration) (da
 	}
 
 	if len(dataBuffer) > 0 {
-		probes = parseHexResponse(dataBuffer, config.IP)
+		probes = ParseHexResponse(dataBuffer, config.IP)
 	}
 
 	return dataBuffer, probes, true, nil
@@ -144,7 +146,7 @@ func RequestFromTCPServer(config ServerConfig, command string, timeout time.Dura
 		}
 
 		dataBuffer = buf
-		valid, hasAnomaly := filterValidProbes(parsed, config.IP)
+		valid, hasAnomaly := FilterValidProbes(parsed, config.IP)
 		probes = valid
 
 		if !hasAnomaly || attempt == maxRequestRetries {
@@ -164,13 +166,16 @@ func RequestFromTCPServer(config ServerConfig, command string, timeout time.Dura
 	return result
 }
 
-// parseHexResponse parses hex response from temperature sensor
+// ParseHexResponse parses hex response from temperature sensor
 // Protocol format:
 // - 1 probe:  41 41 5a 00 5a 19 a3 5a 0d (9 bytes)
 // - 2 probes: 41 41 5a 03 5a 19 a3 5a 19 ae 5a 0d (12 bytes)
 // OR
 // - 2 probes: 41 41 5a [probe1_2bytes] 5a [probe2_2bytes] 5a 0d (depends on device)
-func parseHexResponse(data []byte, ip string) []ProbeData {
+//
+// Exported so other transports (e.g. serialclient) that receive the same
+// hex-framed protocol over a different link can reuse this parser.
+func ParseHexResponse(data []byte, ip string) []ProbeData {
 	probes := []ProbeData{}
 	hexStr := strings.ToUpper(hex.EncodeToString(data))
 	log.Printf("Received hex data (%s): %s", ip, formatHexString(hexStr))
