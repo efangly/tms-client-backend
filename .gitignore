@@ -45,3 +45,5 @@ go.work
 Thumbs.db
 
 /logs
+
+/archives

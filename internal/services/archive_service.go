@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
@@ -17,6 +18,10 @@ import (
 	"tms-backend/internal/models"
 	"tms-backend/internal/utils"
 )
+
+// validTableName guards against SQL injection when a table name is
+// interpolated into raw SQL (table identifiers can't be bound params).
+var validTableName = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
 // GlobalArchiveService is the process-wide archive service instance, wired up
 // in main.go alongside GlobalPollingService.
@@ -221,8 +226,23 @@ func (a *ArchiveService) RunArchive() (ArchiveResult, error) {
 // write them to a JSON file, verify the write, then delete the rows from
 // temp_log and record the archive_manifest entry in one transaction.
 func (a *ArchiveService) archiveDay(day string) (int, error) {
+	return a.archiveDayFromTable("temp_log", day, true)
+}
+
+// archiveDayFromTable archives all rows for a single day (YYYY-MM-DD) found
+// in sourceTable: write them to a JSON file, verify the write, then (if
+// deleteAfter) delete the rows from sourceTable and record the
+// archive_manifest entry, all in one transaction. The archive file and
+// manifest row are always filed under the "temp_log" source, so data pulled
+// in from a differently-named table (e.g. a renamed backup table) merges
+// into the same archive series that report/restore endpoints already read.
+func (a *ArchiveService) archiveDayFromTable(sourceTable, day string, deleteAfter bool) (int, error) {
+	if !validTableName.MatchString(sourceTable) {
+		return 0, fmt.Errorf("invalid source table name %q", sourceTable)
+	}
+
 	var rows []models.TempLog
-	if err := database.DB.Where("insert_time BETWEEN ? AND ?", day+" 00:00:00", day+" 23:59:59").
+	if err := database.DB.Table(sourceTable).Where("insert_time BETWEEN ? AND ?", day+" 00:00:00", day+" 23:59:59").
 		Order("insert_time ASC").Find(&rows).Error; err != nil {
 		return 0, fmt.Errorf("query rows: %w", err)
 	}
@@ -240,9 +260,11 @@ func (a *ArchiveService) archiveDay(day string) (int, error) {
 	}
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("insert_time BETWEEN ? AND ?", day+" 00:00:00", day+" 23:59:59").
-			Delete(&models.TempLog{}).Error; err != nil {
-			return err
+		if deleteAfter {
+			if err := tx.Table(sourceTable).Where("insert_time BETWEEN ? AND ?", day+" 00:00:00", day+" 23:59:59").
+				Delete(&models.TempLog{}).Error; err != nil {
+				return err
+			}
 		}
 		manifest := models.ArchiveManifest{
 			SourceTable: "temp_log",
@@ -260,6 +282,46 @@ func (a *ArchiveService) archiveDay(day string) (int, error) {
 	}
 
 	return len(rows), nil
+}
+
+// ArchiveFromTable archives every day of data found in an arbitrarily-named
+// source table that shares temp_log's schema (e.g. a renamed backup table),
+// filing it under the "temp_log" archive series so existing report/restore
+// endpoints pick it up transparently. Days already present in
+// archive_manifest are skipped, so re-running against the same table is
+// idempotent.
+func (a *ArchiveService) ArchiveFromTable(sourceTable string, deleteAfter bool) (ArchiveResult, error) {
+	result := ArchiveResult{}
+
+	if !validTableName.MatchString(sourceTable) {
+		return result, fmt.Errorf("invalid source table name %q", sourceTable)
+	}
+
+	var days []string
+	query := fmt.Sprintf(`SELECT DISTINCT DATE_FORMAT(insert_time, '%%Y-%%m-%%d') AS day FROM %s ORDER BY day`, sourceTable)
+	if err := database.DB.Raw(query).Scan(&days).Error; err != nil {
+		return result, fmt.Errorf("failed to list archivable days: %w", err)
+	}
+
+	for _, day := range days {
+		var existing models.ArchiveManifest
+		err := database.DB.Where("source_table = ? AND period_date = ?", "temp_log", day).First(&existing).Error
+		if err == nil {
+			continue // already archived
+		}
+
+		rows, err := a.archiveDayFromTable(sourceTable, day, deleteAfter)
+		if err != nil {
+			utils.LogError("Failed to archive %s for %s: %v", sourceTable, day, err)
+			continue
+		}
+		if rows > 0 {
+			result.DaysArchived++
+			result.RowsArchived += rows
+		}
+	}
+
+	return result, nil
 }
 
 // RestoreRange loads archived temp_log data for [startDate, endDate] (each
