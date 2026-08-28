@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -32,12 +33,21 @@ func Connect() error {
 		charset = "tis620"
 	}
 
-	// Build DSN with explicit charset to avoid mismatch issues
-	// parseTime=True: Parse datetime to time.Time
-	// loc=Local: Use local timezone
-	// charset: Set connection charset
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=True&loc=Local&charset=%s",
-		user, password, host, port, dbname, charset)
+	// Build DSN via the driver's own config so special characters in the
+	// password (e.g. "@") are escaped correctly instead of corrupting the DSN.
+	// Start from NewConfig() (not a bare struct literal) so driver defaults
+	// like AllowNativePasswords/CheckConnLiveness/Collation are preserved,
+	// matching what ParseDSN would have filled in for the old string DSN.
+	cfg := mysqldriver.NewConfig()
+	cfg.User = user
+	cfg.Passwd = password
+	cfg.Net = "tcp"
+	cfg.Addr = fmt.Sprintf("%s:%s", host, port)
+	cfg.DBName = dbname
+	cfg.ParseTime = true
+	cfg.Loc = time.Local
+	cfg.Params = map[string]string{"charset": charset}
+	dsn := cfg.FormatDSN()
 
 	log.Printf("Connecting to database with charset: %s", charset)
 	log.Printf("DSN (without password): %s:***@tcp(%s:%s)/%s?parseTime=True&loc=Local&charset=%s",
