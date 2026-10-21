@@ -36,6 +36,33 @@ func TestOneProbe_NineBytes(t *testing.T) {
 	}
 }
 
+// TestUltraLow_Header4142 verifies the -80 unit formula (header 41 42).
+//
+// Frame: 41 42 5A 00 5A 02 D4 5A 0D
+//   raw = 0x02D4 = 724 → temp = -(724*0.01) - 48.24 = -55.48 °C
+func TestUltraLow_Header4142(t *testing.T) {
+	data := []byte{0x41, 0x42, 0x5a, 0x00, 0x5a, 0x02, 0xd4, 0x5a, 0x0d}
+	probes := ParseHexResponse(data, "192.168.1.1")
+
+	if len(probes) != 1 {
+		t.Fatalf("expected 1 probe, got %d", len(probes))
+	}
+	if probes[0].RealValue != 724 {
+		t.Errorf("RealValue = %d, want 724", probes[0].RealValue)
+	}
+	if probes[0].TempValue != -55.48 {
+		t.Errorf("TempValue = %v, want -55.48", probes[0].TempValue)
+	}
+}
+
+// TestUnknownHeader_Rejected verifies a header other than 41 41 / 41 42 is rejected.
+func TestUnknownHeader_Rejected(t *testing.T) {
+	data := []byte{0x41, 0x43, 0x5a, 0x00, 0x5a, 0x02, 0xd4, 0x5a, 0x0d}
+	if probes := ParseHexResponse(data, "192.168.1.1"); len(probes) != 0 {
+		t.Errorf("expected 0 probes, got %d", len(probes))
+	}
+}
+
 // TestTwoProbes_TwelveBytes verifies the dual-probe 12-byte frame.
 //
 // Frame: 41 41 5A 03 5A 19 A3 5A 19 AE 5A 0D

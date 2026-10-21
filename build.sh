@@ -14,6 +14,10 @@ export CGO_ENABLED=1
 
 # Build binary with -H windowsgui to hide console window (runs as tray app)
 echo "📦 Building for Windows (amd64) as system tray app..."
+# Version precedence: shell env VERSION > VERSION in .env > git describe > "dev"
+if [ -z "$VERSION" ] && [ -f .env ]; then
+    VERSION="$(grep -E '^VERSION=' .env | tail -n1 | cut -d= -f2- | tr -d '\r"'"'"' ')"
+fi
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
 echo "🏷️  Version: $VERSION"
 go build -ldflags="-s -w -H windowsgui -X tms-backend/internal/version.Version=$VERSION" -o ./build/tms-backend.exe ./main.go
@@ -22,8 +26,14 @@ if [ $? -eq 0 ]; then
     echo "✅ Build successful!"
     echo "📁 Output: build/tms-backend.exe"
     
-    # Copy .env.example
-    cp .env.example ./build/.env 2>/dev/null
+    # Seed build/.env from .env.example only if it doesn't exist yet, so an
+    # already-configured build/.env (DB credentials etc.) is never overwritten.
+    if [ -f ./build/.env ]; then
+        echo "ℹ️  build/.env already exists - keeping it"
+    else
+        cp .env.example ./build/.env 2>/dev/null
+        echo "⚠️  build/.env created from .env.example - fill in DB_HOST, DB_PASSWORD, etc. before running"
+    fi
     
     echo ""
     echo "📝 Deployment instructions:"

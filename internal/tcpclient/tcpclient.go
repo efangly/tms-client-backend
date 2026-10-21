@@ -170,6 +170,7 @@ func RequestFromTCPServer(config ServerConfig, command string, timeout time.Dura
 // Protocol format:
 // - 1 probe:  41 41 5a 00 5a 19 a3 5a 0d (9 bytes)
 // - 2 probes: 41 41 5a 03 5a 19 a3 5a 19 ae 5a 0d (12 bytes)
+// Header 41 42 (instead of 41 41) marks a -80 unit: temp = -(raw*0.01) - 48.24
 // OR
 // - 2 probes: 41 41 5a [probe1_2bytes] 5a [probe2_2bytes] 5a 0d (depends on device)
 //
@@ -188,12 +189,14 @@ func ParseHexResponse(data []byte, ip string) []ProbeData {
 	}
 
 	// Verify header: 41 41 5a
-	if data[0] != 0x41 || data[1] != 0x41 {
-		log.Printf("Invalid header, expected 41 41 got %02X %02X", data[0], data[1])
+	if data[0] != 0x41 || (data[1] != 0x41 && data[1] != 0x42) {
+		log.Printf("Invalid header, expected 41 41 or 41 42 got %02X %02X", data[0], data[1])
 		return probes
 	}
 
-	log.Printf("Valid header: 41 41")
+	// Header 41 42 marks an ultra-low (-80) unit that uses a different formula.
+	ultraLow := data[1] == 0x42
+	log.Printf("Valid header: %02X %02X", data[0], data[1])
 
 	// Check probe indicator at index 3
 	probeIndicator := data[3]
@@ -230,7 +233,7 @@ func ParseHexResponse(data []byte, ip string) []ProbeData {
 	var probe1Temp float64
 	if len(data) >= 7 && data[4] == 0x5a {
 		probe1Value := int(data[5])<<8 | int(data[6])
-		probe1Temp = float64(probe1Value-4000) * 0.01
+		probe1Temp = rawToTemp(probe1Value, ultraLow)
 		log.Printf("Probe 1: bytes[5,6]=0x%02X%02X, decimal=%d, temp=%.2f°C",
 			data[5], data[6], probe1Value, probe1Temp)
 
@@ -269,7 +272,7 @@ func ParseHexResponse(data []byte, ip string) []ProbeData {
 		var probe2Temp float64
 		if len(data) >= 13 && data[10] == 0x5a {
 			probe2Value := int(data[11])<<8 | int(data[12])
-			probe2Temp = float64(probe2Value-4000) * 0.01
+			probe2Temp = rawToTemp(probe2Value, ultraLow)
 			log.Printf("Probe 2: bytes[11,12]=0x%02X%02X, decimal=%d, temp=%.2f°C",
 				data[11], data[12], probe2Value, probe2Temp)
 			probes = append(probes, ProbeData{
@@ -323,7 +326,7 @@ func ParseHexResponse(data []byte, ip string) []ProbeData {
 		// Parse Temperature Probe 2 (index 11, 12)
 		if len(data) >= 13 && data[10] == 0x5a {
 			probe2Value := int(data[11])<<8 | int(data[12])
-			probe2Temp := float64(probe2Value-4000) * 0.01
+			probe2Temp := rawToTemp(probe2Value, ultraLow)
 			log.Printf("Probe 2: bytes[11,12]=0x%02X%02X, decimal=%d, temp=%.2f°C",
 				data[11], data[12], probe2Value, probe2Temp)
 
@@ -341,7 +344,7 @@ func ParseHexResponse(data []byte, ip string) []ProbeData {
 		// Parse Probe 2 (index 8, 9) if exists
 		if data[7] == 0x5a {
 			probe2Value := int(data[8])<<8 | int(data[9])
-			probe2Temp := float64(probe2Value-4000) * 0.01
+			probe2Temp := rawToTemp(probe2Value, ultraLow)
 			log.Printf("Probe 2: bytes[8,9]=0x%02X%02X, decimal=%d, temp=%.2f°C",
 				data[8], data[9], probe2Value, probe2Temp)
 
@@ -373,6 +376,15 @@ func formatHexString(s string) string {
 		}
 	}
 	return strings.Join(result, " ")
+}
+
+// rawToTemp converts a raw probe value to °C. ultraLow selects the -80 unit
+// formula (header 41 42); otherwise the standard formula (header 41 41).
+func rawToTemp(raw int, ultraLow bool) float64 {
+	if ultraLow {
+		return -(float64(raw) * 0.01) - 48.24
+	}
+	return float64(raw-4000) * 0.01
 }
 
 func roundTo2Decimal(val float64) float64 {
