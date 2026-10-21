@@ -17,6 +17,7 @@ import (
 	"tms-backend/internal/models"
 	"tms-backend/internal/services"
 	"tms-backend/internal/utils"
+	"tms-backend/internal/version"
 )
 
 // jsonToColumn maps JSON field names sent by clients to their actual database
@@ -468,7 +469,8 @@ func TemperatureStream(c *fiber.Ctx) error {
 	tempChan := services.GlobalPollingService.SubscribeTemperature()
 
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
-		fmt.Fprintf(w, "data: {\"type\":\"connected\"}\n\n")
+		connected, _ := json.Marshal(fiber.Map{"type": "connected", "version": version.Version})
+		fmt.Fprintf(w, "data: %s\n\n", connected)
 		w.Flush()
 
 		heartbeat := time.NewTicker(30 * time.Second)

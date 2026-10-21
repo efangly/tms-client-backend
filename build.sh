@@ -14,7 +14,9 @@ export CGO_ENABLED=1
 
 # Build binary with -H windowsgui to hide console window (runs as tray app)
 echo "📦 Building for Windows (amd64) as system tray app..."
-go build -ldflags="-s -w -H windowsgui" -o ./build/tms-backend.exe ./main.go
+VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+echo "🏷️  Version: $VERSION"
+go build -ldflags="-s -w -H windowsgui -X tms-backend/internal/version.Version=$VERSION" -o ./build/tms-backend.exe ./main.go
 
 if [ $? -eq 0 ]; then
     echo "✅ Build successful!"

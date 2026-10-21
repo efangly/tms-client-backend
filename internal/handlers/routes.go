@@ -5,6 +5,7 @@ import (
 
 	"tms-backend/internal/database"
 	"tms-backend/internal/services"
+	"tms-backend/internal/version"
 )
 
 // RegisterRoutes wires every HTTP route (including /health) onto app. Shared
@@ -22,7 +23,7 @@ func RegisterRoutes(app *fiber.App) {
 		if !dbOK {
 			status, code = "degraded", 503
 		}
-		return c.Status(code).JSON(fiber.Map{"status": status, "db": dbOK, "mqtt": mqttOK})
+		return c.Status(code).JSON(fiber.Map{"status": status, "db": dbOK, "mqtt": mqttOK, "version": version.Version})
 	})
 
 	// API routes

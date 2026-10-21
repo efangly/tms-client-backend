@@ -11,6 +11,8 @@ import (
 
 	"github.com/getlantern/systray"
 	"golang.org/x/sys/windows/registry"
+
+	"tms-backend/internal/version"
 )
 
 var (
@@ -32,7 +34,7 @@ func Run(port string, startServer func(), cleanup func()) {
 func onReady(startServer func()) {
 	systray.SetIcon(GreenIcon())
 	systray.SetTitle("TMS Backend")
-	systray.SetTooltip(fmt.Sprintf("TMS Backend Server - Port %s", serverPort))
+	systray.SetTooltip(fmt.Sprintf("TMS Backend Server %s - Port %s", version.Version, serverPort))
 
 	mStatus := systray.AddMenuItem("TMS Backend - Running", "Server status")
 	mStatus.Disable()
@@ -114,7 +116,7 @@ func SetError(msg string) {
 // SetRunning updates the tray icon to indicate running state
 func SetRunning() {
 	systray.SetIcon(GreenIcon())
-	systray.SetTooltip(fmt.Sprintf("TMS Backend Server - Port %s", serverPort))
+	systray.SetTooltip(fmt.Sprintf("TMS Backend Server %s - Port %s", version.Version, serverPort))
 }
 
 func openURL(url string) {

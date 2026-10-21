@@ -17,6 +17,7 @@ import (
 	"tms-backend/internal/services"
 	"tms-backend/internal/tray"
 	"tms-backend/internal/utils"
+	"tms-backend/internal/version"
 )
 
 var fiberApp *fiber.App
@@ -34,6 +35,7 @@ func changeToExeDir() error {
 	}
 	exeDir := filepath.Dir(exePath)
 	log.Printf("Working directory: %s", exeDir)
+	log.Printf("TMS Backend version: %s", version.Version)
 	return os.Chdir(exeDir)
 }
 

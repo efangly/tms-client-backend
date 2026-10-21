@@ -30,7 +30,8 @@ fi
 
 echo ""
 echo "=== Building application ==="
-go build -o tms-backend-debug main.go
+VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+go build -ldflags="-X tms-backend/internal/version.Version=$VERSION" -o tms-backend-debug main.go
 
 if [ $? -eq 0 ]; then
     echo "✅ Build successful"

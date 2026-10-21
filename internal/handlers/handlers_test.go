@@ -6,9 +6,12 @@
 package handlers_test
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -23,6 +26,7 @@ import (
 	"tms-backend/internal/models"
 	"tms-backend/internal/services"
 	"tms-backend/internal/testutil"
+	"tms-backend/internal/version"
 )
 
 // ── test app factory ──────────────────────────────────────────────────────────
@@ -72,6 +76,44 @@ func TestHealth_DBUp(t *testing.T) {
 	}
 	if body["db"] != true {
 		t.Errorf("db field = %v, want true", body["db"])
+	}
+	if body["version"] != version.Version {
+		t.Errorf("version field = %v, want %s", body["version"], version.Version)
+	}
+}
+
+// ── /api/temperature-stream ───────────────────────────────────────────────────
+
+func TestTemperatureStream_ConnectedEventCarriesVersion(t *testing.T) {
+	services.GlobalPollingService = services.NewPollingService()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	app := newTestApp()
+	go app.Listener(ln)
+	t.Cleanup(func() { app.Shutdown() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+ln.Addr().String()+"/api/temperature-stream", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET stream: %v", err)
+	}
+	defer resp.Body.Close()
+
+	line, err := bufio.NewReader(resp.Body).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read first line: %v", err)
+	}
+	var ev map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(strings.TrimSpace(line), "data: ")), &ev); err != nil {
+		t.Fatalf("decode %q: %v", line, err)
+	}
+	if ev["type"] != "connected" || ev["version"] != version.Version {
+		t.Errorf("first event = %v, want connected with version %s", ev, version.Version)
 	}
 }
 
