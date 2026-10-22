@@ -74,13 +74,18 @@ dotnet/
 - [x] Network wait/DB retry รันใน `StartupWorker` (BackgroundService) หลัง host start แทนการ block ก่อน `Run` — SCM จะ kill service ที่ไม่ตอบภายใน 30s; service อื่นรอ `AppReadiness`
 
 ## Phase 2 — Data layer (Dapper)
-- [ ] Models (record/class) ตาม `internal/models/models.go`: `MasterMachine` (+ helper `GetMinTemp/MaxTemp/AdjTemp`, `IsTemperatureType`, `GetUnit`, `GetScheduleTimes`, `HasScheduleTime`), `TempLog`, `TempError`, `TempLogArchive`, `ArchiveManifest`, `ConfigValue`, DTO `MachineWithStatus`, `DeviceGroup`
-- [ ] JSON naming: camelCase ตรงกับ tag เดิม (`machineIp`, `probeNo`, `sType`, ...), null handling เหมือน pointer ใน Go, `MasterUser.Password` ไม่ serialize
-- [ ] `DbConnectionFactory`: connection string จาก options, pool (max 100, idle lifetime 5 นาที), ping สำหรับ `/health`
-- [ ] Startup connect + retry w/ backoff (5 ครั้ง, 2s→30s) + `WaitForNetwork(60s)` port จาก `internal/utils/network.go`
-- [ ] Repositories: Machine, TempLog, TempError, Archive, Config — แปล query จาก `handlers.go` / `polling.go` / `archive_service.go` เป็น SQL ตรง (คงลำดับ/เงื่อนไขเดิม)
-- [ ] Insert `temp_log`/`temp_error` เวลาแบบ Thailand time + ms (แทน GORM `BeforeCreate`)
-- [ ] Unit tests: port `models_test.go`
+- [x] Models (record/class) ตาม `internal/models/models.go`: `MasterMachine` (+ helper `GetMinTemp/MaxTemp/AdjTemp`, `IsTemperatureType`, `GetUnit`, `GetScheduleTimes`, `HasScheduleTime`), `TempLog`, `TempError`, `TempLogArchive`, `ArchiveManifest`, `ConfigValue`, DTO `MachineWithStatus`, `DeviceGroup`
+- [x] JSON naming: camelCase ตรงกับ tag เดิม (`machineIp`, `probeNo`, `sType`, ...), null handling เหมือน pointer ใน Go, `MasterUser.Password` ไม่ serialize
+- [x] `DbConnectionFactory`: connection string จาก options, pool (max 100, idle lifetime 5 นาที), ping สำหรับ `/health`
+- [x] Startup connect + retry w/ backoff (5 ครั้ง, 2s→30s) + `WaitForNetwork(60s)` port จาก `internal/utils/network.go`
+- [x] Repositories: Machine, TempLog, TempError, Archive, Config — แปล query จาก `handlers.go` / `polling.go` / `archive_service.go` เป็น SQL ตรง (คงลำดับ/เงื่อนไขเดิม)
+- [x] Insert `temp_log`/`temp_error`: repository รับ `DateTime` (ส่ง `ThaiTime.Now` จาก Phase 4); คอลัมน์เป็น `DATETIME(0)` ms ถูกตัดเหมือน Go; INSERT ข้ามคอลัมน์ที่มี default เมื่อค่าเป็น zero เหมือน GORM `Create`
+- [x] Unit tests: port `models_test.go`
+- [x] JSON แบบ Go: เวลา RFC3339 + offset ของเครื่อง (`GoTimeConverter`), ภาษาไทยไม่ escape — ไฟล์ archive เดิมของ Go อ่านได้
+- [x] `temp_log.temp_value` เป็น FLOAT: แปลงผ่าน shortest round-trip ได้ `25.4` (Go บาง query ได้ `25.399999618530273` จาก binary protocol)
+- [x] Partial update ของ machine (`MachineUpdate`) ใช้ whitelist คอลัมน์ — key ที่ไม่ใช่คอลัมน์ → error (Go: DB error → 500)
+- [x] ต่อ DB ไม่ได้หลัง 5 ครั้ง → retry ทุก 30s ต่อไป (Go ยอมแพ้และ server ไม่ start)
+- [x] Smoke test อ่าน DB จริงแบบ opt-in: `TMS_DB_SMOKE=<path .env> dotnet test`
 
 ## Phase 3 — Device communication
 - [ ] `HexProtocolParser` port จาก `tcpclient.ParseHexResponse` ครบ: header `41 41`/`41 42` (ultra-low), 9/12/15/18 bytes, `rawToTemp`, `calcHumidity` (SHT1x), round 2 ตำแหน่ง, `FilterValidProbes`

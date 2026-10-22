@@ -2,6 +2,8 @@ using System.Globalization;
 using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Logging.EventLog;
 using TmsBackend.Config;
+using TmsBackend.Data;
+using TmsBackend.Json;
 using TmsBackend.Infrastructure;
 using TmsBackend.Logging;
 
@@ -79,6 +81,12 @@ builder.WebHost.ConfigureKestrel(k => k.ListenAnyIP(options.Port));
 
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton<AppReadiness>();
+builder.Services.AddSingleton<Db>();
+builder.Services.AddSingleton<IMachineRepository, MachineRepository>();
+builder.Services.AddSingleton<ITempLogRepository, TempLogRepository>();
+builder.Services.AddSingleton<ITempErrorRepository, TempErrorRepository>();
+builder.Services.AddSingleton<IArchiveRepository, ArchiveRepository>();
+builder.Services.ConfigureHttpJsonOptions(o => GoJson.Configure(o.SerializerOptions));
 builder.Services.AddHostedService<StartupWorker>();
 
 var app = builder.Build();

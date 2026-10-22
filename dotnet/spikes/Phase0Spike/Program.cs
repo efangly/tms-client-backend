@@ -12,6 +12,9 @@ if (args.Length > 0 && args[0] == "serial")
 }
 
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+var colsMode = args.Length > 0 && args[0] == "cols";
+if (colsMode)
+    args = args[1..];
 DotNetEnv.Env.Load(args.Length > 0 ? args[0] : "../../../.env");
 
 string Env(string k, string d = "") => Environment.GetEnvironmentVariable(k) is { Length: > 0 } v ? v : d;
@@ -27,6 +30,12 @@ var csb = new MySqlConnectionStringBuilder
     AllowZeroDateTime = true,
     ConvertZeroDateTime = true,
 };
+
+if (colsMode)
+{
+    await ColsSpike.Run(csb.ConnectionString);
+    return;
+}
 
 Console.WriteLine("== Server / column info ==");
 await using (var c = new MySqlConnection(csb.ConnectionString))
