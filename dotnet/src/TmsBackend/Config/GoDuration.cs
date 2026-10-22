@@ -1,0 +1,44 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
+
+namespace TmsBackend.Config;
+
+/// <summary>
+/// Parses Go-style duration strings ("5m", "5s", "1h30m", "500ms") so the
+/// existing .env values (POLL_INTERVAL=5m, ALERT_INTERVAL=5s) keep working.
+/// </summary>
+public static partial class GoDuration
+{
+    [GeneratedRegex(@"(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)", RegexOptions.CultureInvariant)]
+    private static partial Regex Part();
+
+    public static bool TryParse(string? value, out TimeSpan result)
+    {
+        result = TimeSpan.Zero;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var s = value.Trim();
+        var matches = Part().Matches(s);
+        // Every character must belong to a number+unit pair, e.g. reject "5x" or "5".
+        if (matches.Count == 0 || matches.Sum(m => m.Length) != s.Length)
+            return false;
+
+        double ticks = 0;
+        foreach (Match m in matches)
+        {
+            var n = double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+            ticks += m.Groups[2].Value switch
+            {
+                "ns" => n / 100,
+                "us" or "µs" => n * 10,
+                "ms" => n * TimeSpan.TicksPerMillisecond,
+                "s" => n * TimeSpan.TicksPerSecond,
+                "m" => n * TimeSpan.TicksPerMinute,
+                _ => n * TimeSpan.TicksPerHour,
+            };
+        }
+        result = TimeSpan.FromTicks((long)ticks);
+        return true;
+    }
+}

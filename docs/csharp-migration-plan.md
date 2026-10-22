@@ -61,14 +61,17 @@ dotnet/
 - [x] `.gitignore` สำหรับ `bin/ obj/ publish/`
 
 ## Phase 1 — Foundation (Config, Logging, Hosting)
-- [ ] `Program.cs`: ตั้ง `ContentRoot`/working dir = `AppContext.BaseDirectory` (แทน `changeToExeDir`) + fallback `.env` จาก launch dir สำหรับ `dotnet run`
-- [ ] โหลด `.env` (DotNetEnv) → bind `AppOptions` ครบทุก key เดิม: `PORT, DB_*, DB_CHARSET, POLL_INTERVAL, ALERT_INTERVAL, LEGACY_API_URL/TOKEN, MQTT_*, DEFAULT_TCP_PORT, DEFAULT_SERIAL_BAUD, DEFAULT_SERIAL_BOOT_DELAY, ARCHIVE_DIR, ARCHIVE_RETENTION_DAYS, ARCHIVE_RUN_HOUR` (ดู `.env.example`)
-- [ ] เพิ่ม key ใหม่ `POLLING_AUTOSTART` (default true) สำหรับ e2e
-- [ ] Serilog: console format อ่านง่าย, `logs/error_YYYY-MM-DD.txt` เฉพาะ Error (เหมือน `internal/utils/logger.go` รวม cleanup ไฟล์เก่า), Windows EventLog เมื่อรันเป็น service
-- [ ] Startup diagnostic log `%TEMP%\tms-backend-startup.log` (cap 200KB) แบบ `startupDiag` ใน `main.go`
-- [ ] `UseWindowsService()` — auto-detect: รันจาก SCM = service, double-click = console (Ctrl+C → graceful shutdown, `HostOptions.ShutdownTimeout = 15s`)
-- [ ] Version: `AssemblyInformationalVersion`, log ตอนเริ่ม
-- [ ] Global exception handling: unhandled exception ใน background loop ไม่ทำให้ process ล้ม (เทียบ `recover()` ใน Go)
+- [x] `Program.cs`: ตั้ง `ContentRoot`/working dir = `AppContext.BaseDirectory` (แทน `changeToExeDir`) + fallback `.env` จาก launch dir สำหรับ `dotnet run`
+- [x] โหลด `.env` (DotNetEnv) → bind `AppOptions` ครบทุก key เดิม: `PORT, DB_*, DB_CHARSET, POLL_INTERVAL, ALERT_INTERVAL, LEGACY_API_URL/TOKEN, MQTT_*, DEFAULT_TCP_PORT, DEFAULT_SERIAL_BAUD, DEFAULT_SERIAL_BOOT_DELAY, ARCHIVE_DIR, ARCHIVE_RETENTION_DAYS, ARCHIVE_RUN_HOUR` (ดู `.env.example`)
+- [x] เพิ่ม key ใหม่ `POLLING_AUTOSTART` (default true) สำหรับ e2e
+- [x] **ตัดสินใจแล้ว (2026-10-22): ใช้ค่าตาม `.env` จริง** — ต่างจาก Go ที่อ่าน `DEFAULT_TCP_PORT`, `ARCHIVE_*`, `DEFAULT_SERIAL_*` ใน `init()` ก่อนโหลด `.env` (ค่าใน `.env` จึงไม่มีผล) และ hardcode `POLL_INTERVAL=5m` / `ALERT_INTERVAL=5s` → ก่อน cutover (Phase 8) ต้องตรวจ `.env` ของแต่ละเครื่องว่าค่าที่เขียนไว้คือค่าที่ต้องการจริง
+- [x] Logging (ใช้ Microsoft.Extensions.Logging แทน Serilog): console บรรทัดเดียว + timestamp, `logs/error_YYYY-MM-DD.txt` เฉพาะ Error ผ่าน `ErrorFileLoggerProvider` (ชื่อไฟล์/รูปแบบ/ลบไฟล์เก่า 30 วัน เหมือน `internal/utils/logger.go`), Windows EventLog (Warning+) เมื่อรันเป็น service
+- [x] Startup diagnostic log `%TEMP%\tms-backend-startup.log` (cap 200KB) แบบ `startupDiag` ใน `main.go`
+- [x] `UseWindowsService()` — auto-detect: รันจาก SCM = service, double-click = console (Ctrl+C → graceful shutdown, `HostOptions.ShutdownTimeout = 15s`) — console ทดสอบแล้ว, โหมด service ทดสอบจริงใน Phase 7 (ต้องใช้ admin)
+- [x] Version: `AssemblyInformationalVersion`, log ตอนเริ่ม
+- [x] Global exception handling: unhandled exception ใน background loop ไม่ทำให้ process ล้ม (เทียบ `recover()` ใน Go)
+- [x] บังคับ `CultureInfo.InvariantCulture` ทั้งแอป (เครื่อง th-TH จะได้ปี พ.ศ. และตัวคั่นวันที่ต่างจาก Go)
+- [x] Network wait/DB retry รันใน `StartupWorker` (BackgroundService) หลัง host start แทนการ block ก่อน `Run` — SCM จะ kill service ที่ไม่ตอบภายใน 30s; service อื่นรอ `AppReadiness`
 
 ## Phase 2 — Data layer (Dapper)
 - [ ] Models (record/class) ตาม `internal/models/models.go`: `MasterMachine` (+ helper `GetMinTemp/MaxTemp/AdjTemp`, `IsTemperatureType`, `GetUnit`, `GetScheduleTimes`, `HasScheduleTime`), `TempLog`, `TempError`, `TempLogArchive`, `ArchiveManifest`, `ConfigValue`, DTO `MachineWithStatus`, `DeviceGroup`
@@ -136,6 +139,7 @@ dotnet/
 - [ ] สิทธิ์ service account: LocalSystem (default) — ตรวจว่าเข้าถึง COM port และเขียน `C:\TMS\logs`, `archives` ได้
 
 ## Phase 8 — Cutover & Cleanup
+- [ ] ตรวจ `.env` ของทุกเครื่องก่อนติดตั้ง: `POLL_INTERVAL`, `ALERT_INTERVAL`, `DEFAULT_TCP_PORT`, `DEFAULT_SERIAL_*`, `ARCHIVE_*` จะเริ่มมีผลจริงใน C# (Go ไม่สนค่าเหล่านี้)
 - [ ] Deploy เครื่อง pilot 1 เครื่อง ด้วย setup.exe ทับ Go เดิม ตรวจ: service start หลัง reboot, auto-restart เมื่อ kill process, frontend/SSE ใช้ได้, log ถูกที่
 - [ ] Rollout เครื่องที่เหลือ
 - [ ] อัปเดต `README.md` (ภาษาไทย): build, ติดตั้ง, console vs service, troubleshooting

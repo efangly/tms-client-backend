@@ -4,7 +4,19 @@
     <AssemblyName>tms-backend</AssemblyName>
     <RootNamespace>TmsBackend</RootNamespace>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- Overridden at publish time: dotnet publish -p:Version=<git describe> -->
     <Version>0.0.0-dev</Version>
+    <!-- Keep InformationalVersion exactly as passed in (no "+<commit sha>" suffix) -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="TmsBackend.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="DotNetEnv" Version="3.2.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.13" />
+  </ItemGroup>
 
 </Project>
