@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <AssemblyName>tms-backend</AssemblyName>
+    <RootNamespace>TmsBackend</RootNamespace>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Version>0.0.0-dev</Version>
+  </PropertyGroup>
+
+</Project>
