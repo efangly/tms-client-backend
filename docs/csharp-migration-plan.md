@@ -100,17 +100,23 @@ dotnet/
 - [x] ทดสอบกับอุปกรณ์จริงแล้ว: TCP `192.168.1.111` และ `COM4` อ่านค่าได้ถูกต้อง, `SerialService` เปิด COM4 ตอน startup
 
 ## Phase 4 — Background services
-- [ ] `MqttService` (MQTTnet): connect+retry, `PublishTemperature/Batch`, payload JSON เหมือน `mqtt_service.go`, `IsConnected`
-- [ ] `LegacyApiService` (`HttpClient` + typed client): `SendTempLog/Batch/Alert`, token header, timeout เหมือน `api_notification.go`
-- [ ] `PollingService` (BackgroundService) port `polling.go`:
-  - [ ] poll & save ทุก `POLL_INTERVAL` (+ initial poll ตอนเริ่ม) → insert temp_log, legacy API, notify SSE `refresh`
-  - [ ] alert loop ทุก `ALERT_INTERVAL`: `checkAlerts` / `checkProbeAlert` state machine, `alertStates`, `alertLastSent` repeat, `updateChkMon`, MQTT publish, notify SSE `temperature`
-  - [ ] `checkMonitoredMachines`, `checkScheduleReports` (ทุก 5 นาที)
-  - [ ] machine cache 1 นาที + stale fallback
-  - [ ] `TriggerOnce()` สำหรับ `POST /api/poll`
-  - [ ] event hub: `Subscribe/Unsubscribe` ด้วย `Channel<T>` (bounded 10, drop เมื่อเต็ม เหมือน Go)
-- [ ] `ArchiveService` (BackgroundService, ทุกชั่วโมง, รันวันละครั้งหลัง `ARCHIVE_RUN_HOUR`): `RunArchive`, `archiveDayFromTable`, `ArchiveFromTable`, `RestoreRange`, write+verify file — **รูปแบบไฟล์ JSON/ชื่อไฟล์/manifest ต้องเหมือนเดิม** เพื่ออ่านไฟล์ที่ Go archive ไว้ได้
-- [ ] Unit tests: port `polling_test.go`, `archive_service_test.go`, `serial_service_test.go`, `request_probes_test.go` (mock repository แทน sqlmock)
+- [x] `MqttService` (MQTTnet): connect+retry, `PublishTemperature/Batch`, payload JSON เหมือน `mqtt_service.go`, `IsConnected`
+- [x] `LegacyApiService` (`HttpClient` + typed client): `SendTempLog/Batch/Alert`, token header, timeout เหมือน `api_notification.go`
+- [x] `PollingService` (BackgroundService) port `polling.go`:
+  - [x] poll & save ทุก `POLL_INTERVAL` (+ initial poll ตอนเริ่ม) → insert temp_log, legacy API, notify SSE `refresh`
+  - [x] alert loop ทุก `ALERT_INTERVAL`: `checkAlerts` / `checkProbeAlert` state machine, `alertStates`, `alertLastSent` repeat, `updateChkMon`, MQTT publish, notify SSE `temperature`
+  - [x] `checkMonitoredMachines`, `checkScheduleReports` (ทุก 5 นาที)
+  - [x] machine cache 1 นาที + stale fallback
+  - [x] `TriggerOnce()` สำหรับ `POST /api/poll`
+  - [x] event hub: `Subscribe/Unsubscribe` ด้วย `Channel<T>` (bounded 10, drop เมื่อเต็ม เหมือน Go)
+- [x] `ArchiveService` (BackgroundService, ทุกชั่วโมง, รันวันละครั้งหลัง `ARCHIVE_RUN_HOUR`): `RunArchive`, `archiveDayFromTable`, `ArchiveFromTable`, `RestoreRange`, write+verify file — **รูปแบบไฟล์ JSON/ชื่อไฟล์/manifest ต้องเหมือนเดิม** เพื่ออ่านไฟล์ที่ Go archive ไว้ได้
+- [x] Unit tests: port `polling_test.go`, `archive_service_test.go`, `serial_service_test.go`, `request_probes_test.go` (mock repository แทน sqlmock)
+- [x] MQTT reconnect เองเสมอ (backoff สูงสุด 30s) แม้ connect ครั้งแรกล้มเหลว — Go ไม่เคย reconnect ในกรณีนั้น เพราะ alert loop ข้าม publish เมื่อไม่ connected
+- [x] fire-and-forget (Legacy API, MQTT) รันใน background task แบบ log error เหมือน `go func()`
+- [x] `POLLING_AUTOSTART=false` ปิด poll/alert/schedule/archive loop (ยังสั่ง poll/archive ผ่าน API ได้)
+- [x] Path ใน archive_manifest เหมือน Go (`archives\temp_log\YYYY\MM\temp_log_YYYY-MM-DD.json`) — ตรวจกับ manifest จริง 211 แถวแล้ว
+- [x] ทดสอบ startup จริง (polling ปิด, MQTT ชี้ localhost): DB → serial COM4 → MQTT retry ทำงานตามลำดับ
+- [ ] ทดสอบ poll/alert จริงกับ DB + Legacy API + MQTT จริง (รอยืนยัน — จะเขียน DB dev และส่งข้อมูลออกภายนอก)
 
 ## Phase 5 — HTTP API
 - [ ] Endpoints ตาม `internal/handlers/routes.go` (path/method/status code/JSON body ต้องเหมือนเดิม):

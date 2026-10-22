@@ -21,5 +21,7 @@ static class ColsSpike
         foreach (var r in await c.QueryAsync(@"SELECT TABLE_NAME t, TABLE_ROWS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()
             AND TABLE_NAME IN ('master_machine','temp_log','temp_error','archive_manifest','temp_log_archive')"))
             Console.WriteLine($"ROWS~ {r.t} = {r.n}");
+        foreach (var r in await c.QueryAsync("SELECT id, source_table, period_date, file_path, row_count, archived_at FROM archive_manifest ORDER BY period_date DESC LIMIT 3"))
+            Console.WriteLine($"MANIFEST {r.id} {r.source_table} {r.period_date} '{r.file_path}' rows={r.row_count} at={r.archived_at:yyyy-MM-dd HH:mm:ss.fff}");
     }
 }

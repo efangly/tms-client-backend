@@ -18,6 +18,15 @@ public static class ThaiTime
     }
 
     /// <summary>Current Thai time as a DateTime with Kind=Unspecified (what the DB columns store).</summary>
-    public static DateTime Now =>
-        DateTime.SpecifyKind(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Zone), DateTimeKind.Unspecified);
+    public static DateTime Now => From(DateTimeOffset.UtcNow);
+
+    /// <summary>Thai wall-clock time for <paramref name="instant"/>, Kind=Unspecified.</summary>
+    public static DateTime From(DateTimeOffset instant) =>
+        DateTime.SpecifyKind(TimeZoneInfo.ConvertTimeFromUtc(instant.UtcDateTime, Zone), DateTimeKind.Unspecified);
+
+    /// <summary>Thai wall-clock "now" according to <paramref name="time"/> (tests pass a fake clock).</summary>
+    public static DateTime ThaiNow(this TimeProvider time) => From(time.GetUtcNow());
+
+    /// <summary>Go time.Truncate(time.Microsecond).</summary>
+    public static DateTime TruncateToMicrosecond(this DateTime t) => new(t.Ticks - t.Ticks % 10, t.Kind);
 }

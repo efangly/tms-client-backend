@@ -4,8 +4,14 @@ using TmsBackend.Config;
 
 namespace TmsBackend.Data;
 
+/// <summary>Database liveness check, split out so background services can be tested without a server.</summary>
+public interface IDbPing
+{
+    Task<bool> PingAsync(CancellationToken ct = default);
+}
+
 /// <summary>Pooled MySQL/MariaDB connections (Go: database.DB).</summary>
-public sealed class Db : IAsyncDisposable
+public sealed class Db : IAsyncDisposable, IDbPing
 {
     static Db()
     {

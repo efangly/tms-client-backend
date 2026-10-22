@@ -6,6 +6,7 @@ using TmsBackend.Data;
 using TmsBackend.Json;
 using TmsBackend.Infrastructure;
 using TmsBackend.Logging;
+using TmsBackend.Services;
 using TmsBackend.Transport;
 using TmsBackend.Transport.Serial;
 
@@ -96,6 +97,17 @@ builder.Services.AddSingleton<TcpProbeClient>();
 builder.Services.AddSingleton<SerialService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SerialService>());
 builder.Services.AddSingleton<IProbeRequester, ProbeRequester>();
+builder.Services.AddSingleton<IDbPing>(sp => sp.GetRequiredService<Db>());
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<EventHub>();
+builder.Services.AddHttpClient<ILegacyApi, LegacyApiService>(c => c.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<MqttService>();
+builder.Services.AddSingleton<IMqttPublisher>(sp => sp.GetRequiredService<MqttService>());
+builder.Services.AddHostedService(sp => sp.GetRequiredService<MqttService>());
+builder.Services.AddSingleton<PollingService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PollingService>());
+builder.Services.AddSingleton<ArchiveService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ArchiveService>());
 builder.Services.ConfigureHttpJsonOptions(o => GoJson.Configure(o.SerializerOptions));
 builder.Services.AddHostedService<StartupWorker>();
 
