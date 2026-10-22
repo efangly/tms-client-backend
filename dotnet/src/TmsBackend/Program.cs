@@ -6,6 +6,8 @@ using TmsBackend.Data;
 using TmsBackend.Json;
 using TmsBackend.Infrastructure;
 using TmsBackend.Logging;
+using TmsBackend.Transport;
+using TmsBackend.Transport.Serial;
 
 const string ServiceName = "TMSBackend";
 
@@ -44,6 +46,10 @@ StartupDiag.Write(envPath != null ? $"[3/4] .env loaded OK ({envPath})" : "[WARN
 
 var configWarnings = new List<string>();
 var options = AppOptions.FromEnvironment(configWarnings.Add);
+
+if (args is ["probe", ..])
+    return await ProbeCommand.RunAsync(args, options);
+
 var isService = WindowsServiceHelpers.IsWindowsService();
 StartupDiag.Write($"[4/4] Starting {(isService ? "service" : "console")} on port {options.Port}");
 
@@ -86,6 +92,10 @@ builder.Services.AddSingleton<IMachineRepository, MachineRepository>();
 builder.Services.AddSingleton<ITempLogRepository, TempLogRepository>();
 builder.Services.AddSingleton<ITempErrorRepository, TempErrorRepository>();
 builder.Services.AddSingleton<IArchiveRepository, ArchiveRepository>();
+builder.Services.AddSingleton<TcpProbeClient>();
+builder.Services.AddSingleton<SerialService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SerialService>());
+builder.Services.AddSingleton<IProbeRequester, ProbeRequester>();
 builder.Services.ConfigureHttpJsonOptions(o => GoJson.Configure(o.SerializerOptions));
 builder.Services.AddHostedService<StartupWorker>();
 

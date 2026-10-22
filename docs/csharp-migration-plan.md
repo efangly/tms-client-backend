@@ -88,12 +88,16 @@ dotnet/
 - [x] Smoke test อ่าน DB จริงแบบ opt-in: `TMS_DB_SMOKE=<path .env> dotnet test`
 
 ## Phase 3 — Device communication
-- [ ] `HexProtocolParser` port จาก `tcpclient.ParseHexResponse` ครบ: header `41 41`/`41 42` (ultra-low), 9/12/15/18 bytes, `rawToTemp`, `calcHumidity` (SHT1x), round 2 ตำแหน่ง, `FilterValidProbes`
-- [ ] `TcpProbeClient`: connect/write `cmd+\r`/read จนเจอ `0x0D` หรือ timeout, retry สูงสุด 3 ครั้งเมื่อค่าผิดปกติ
-- [ ] Serial: `SerialConnection` (persistent, lock, boot settle delay, auto-reconnect 5s, mark disconnected เมื่อ I/O error) + `SerialManager` + `IsSerialPath("COMx")` + protocol `sendOnce/Request` จาก `serialclient/protocol.go`
-- [ ] `SerialService` (hosted): เปิดทุก COM จาก `master_machine` ตอนเริ่ม
-- [ ] `ProbeRequester.RequestProbes(ip, cmd, timeout)` เลือก TCP/Serial แบบ `polling.go:requestProbes`
-- [ ] Unit tests: port `tcpclient_test.go`, `protocol_test.go`, `serialclient_test.go` (ใช้ test vector hex เดิมทั้งหมด)
+- [x] `HexProtocolParser` port จาก `tcpclient.ParseHexResponse` ครบ: header `41 41`/`41 42` (ultra-low), 9/12/15/18 bytes, `rawToTemp`, `calcHumidity` (SHT1x), round 2 ตำแหน่ง, `FilterValidProbes`
+- [x] `TcpProbeClient`: connect/write `cmd+\r`/read จนเจอ `0x0D` หรือ timeout, retry สูงสุด 3 ครั้งเมื่อค่าผิดปกติ
+- [x] Serial: `SerialConnection` (persistent, lock, boot settle delay, auto-reconnect 5s, mark disconnected เมื่อ I/O error) + `SerialManager` + `IsSerialPath("COMx")` + protocol `sendOnce/Request` จาก `serialclient/protocol.go`
+- [x] `SerialService` (hosted): เปิดทุก COM จาก `master_machine` ตอนเริ่ม
+- [x] `ProbeRequester.RequestProbes(ip, cmd, timeout)` เลือก TCP/Serial แบบ `polling.go:requestProbes`
+- [x] Unit tests: port `tcpclient_test.go`, `protocol_test.go`, `serialclient_test.go` (ใช้ test vector hex เดิมทั้งหมด)
+- [x] ส่งคำสั่งบน COM เดียวกันทีละคำสั่ง (`SemaphoreSlim`) — Go ล็อกแค่ state ทำให้ poll loop กับ alert loop ส่งคำสั่งซ้อนกันบนพอร์ตเดียวได้
+- [x] ล้าง input buffer ก่อนส่งคำสั่ง serial — กันไบต์ค้างจากรอบที่ timeout มาต่อท้ายเฟรมใหม่
+- [x] Sub-command `tms-backend.exe probe <ip|COMx> [cmd]` อ่านอุปกรณ์ 1 ครั้งแล้วพิมพ์เฟรม/ค่า (ใช้ตรวจหน้างาน)
+- [x] ทดสอบกับอุปกรณ์จริงแล้ว: TCP `192.168.1.111` และ `COM4` อ่านค่าได้ถูกต้อง, `SerialService` เปิด COM4 ตอน startup
 
 ## Phase 4 — Background services
 - [ ] `MqttService` (MQTTnet): connect+retry, `PublishTemperature/Batch`, payload JSON เหมือน `mqtt_service.go`, `IsConnected`
