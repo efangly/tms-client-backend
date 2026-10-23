@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Logging.EventLog;
 using TmsBackend.Config;
 using TmsBackend.Data;
+using TmsBackend.Endpoints;
 using TmsBackend.Json;
 using TmsBackend.Infrastructure;
 using TmsBackend.Logging;
@@ -108,6 +109,8 @@ builder.Services.AddSingleton<PollingService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PollingService>());
 builder.Services.AddSingleton<ArchiveService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ArchiveService>());
+// Fiber cors.New() defaults: any origin, common methods.
+builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
 builder.Services.ConfigureHttpJsonOptions(o => GoJson.Configure(o.SerializerOptions));
 builder.Services.AddHostedService<StartupWorker>();
 
@@ -125,8 +128,9 @@ TaskScheduler.UnobservedTaskException += (_, e) =>
     e.SetObserved();
 };
 
-// Phase 5 replaces this with the full health check (DB ping + MQTT status).
-app.MapGet("/health", () => Results.Json(new { status = "ok", version = AppVersion.Value }));
+app.UseTmsRequestLogging();
+app.UseCors();
+app.MapTmsApi();
 
 if (!isService)
 {

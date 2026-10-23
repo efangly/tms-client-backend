@@ -34,8 +34,18 @@ internal sealed class FakeTempLogRepository : ITempLogRepository
         return Task.CompletedTask;
     }
 
-    public Task<List<TempLog>> QueryAsync(TempLogQuery query, bool fromArchive = false, CancellationToken ct = default) =>
-        Task.FromResult(new List<TempLog>());
+    public List<TempLog> Live { get; } = [];
+    public List<TempLog> Archive { get; } = [];
+    public List<(TempLogQuery Query, bool FromArchive)> Queries { get; } = [];
+    public Exception? QueryError { get; set; }
+
+    public Task<List<TempLog>> QueryAsync(TempLogQuery query, bool fromArchive = false, CancellationToken ct = default)
+    {
+        Queries.Add((query, fromArchive));
+        if (QueryError != null)
+            return Task.FromException<List<TempLog>>(QueryError);
+        return Task.FromResult((fromArchive ? Archive : Live).ToList());
+    }
 
     public Task<TempLog?> GetLatestAsync(string machineIp, int probeNo, CancellationToken ct = default) =>
         Task.FromResult(Latest.GetValueOrDefault((machineIp, probeNo)));
@@ -54,8 +64,13 @@ internal sealed class FakeTempErrorRepository : ITempErrorRepository
         return Task.CompletedTask;
     }
 
-    public Task<List<TempError>> QueryAsync(string? startDate, string? endDate, int limit, CancellationToken ct = default) =>
-        Task.FromResult(new List<TempError>());
+    public List<(string? Start, string? End, int Limit)> Queries { get; } = [];
+
+    public Task<List<TempError>> QueryAsync(string? startDate, string? endDate, int limit, CancellationToken ct = default)
+    {
+        Queries.Add((startDate, endDate, limit));
+        return Task.FromResult(Inserted.ToList());
+    }
 }
 
 internal sealed class FakeProbeRequester : IProbeRequester

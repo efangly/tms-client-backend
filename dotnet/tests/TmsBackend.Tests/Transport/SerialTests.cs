@@ -240,16 +240,56 @@ internal sealed class FakeMachineRepository(params MasterMachine[] machines) : I
     public Task<MasterMachine?> GetFirstByIpAsync(string machineIp, CancellationToken ct = default) =>
         Task.FromResult(Machines.Where(m => m.MachineIP == machineIp).OrderBy(m => m.ProbeNo).FirstOrDefault());
 
-    public Task CreateAsync(MasterMachine machine, CancellationToken ct = default) { Machines.Add(machine); return Task.CompletedTask; }
+    public Exception? WriteError { get; set; }
 
-    public Task UpdateAsync(string machineIp, int probeNo, IReadOnlyDictionary<string, object?> columns, CancellationToken ct = default) =>
-        throw new NotSupportedException();
+    public Task CreateAsync(MasterMachine machine, CancellationToken ct = default)
+    {
+        if (WriteError != null)
+            return Task.FromException(WriteError);
+        Machines.Add(machine);
+        return Task.CompletedTask;
+    }
 
-    public Task DeleteAsync(string machineIp, int? probeNo, CancellationToken ct = default) => throw new NotSupportedException();
+    public List<(string Ip, int ProbeNo, Dictionary<string, object?> Columns)> Updates { get; } = [];
+
+    public Task UpdateAsync(string machineIp, int probeNo, IReadOnlyDictionary<string, object?> columns, CancellationToken ct = default)
+    {
+        if (WriteError != null)
+            return Task.FromException(WriteError);
+        Updates.Add((machineIp, probeNo, columns.ToDictionary()));
+        var m = Machines.FirstOrDefault(x => x.MachineIP == machineIp && x.ProbeNo == probeNo);
+        if (m != null)
+        {
+            foreach (var (col, val) in columns)
+            {
+                switch (col)
+                {
+                    case "machine_name": m.MachineName = (string)val!; break;
+                    case "color": m.Color = (string)val!; break;
+                    case "min_temp": m.MinTemp = (double?)val; break;
+                    case "max_temp": m.MaxTemp = (double?)val; break;
+                    case "chkReport": m.ChkReport = (string)val!; break;
+                }
+            }
+        }
+        return Task.CompletedTask;
+    }
+
+    public List<(string Ip, int? ProbeNo)> Deletes { get; } = [];
+
+    public Task DeleteAsync(string machineIp, int? probeNo, CancellationToken ct = default)
+    {
+        Deletes.Add((machineIp, probeNo));
+        Machines.RemoveAll(m => m.MachineIP == machineIp && (probeNo == null || m.ProbeNo == probeNo));
+        return Task.CompletedTask;
+    }
 
     public List<(string Ip, int ProbeNo, string Value)> ChkMonUpdates { get; } = [];
 
-    public Task UpdateColorAsync(string machineIp, int probeNo, string color, CancellationToken ct = default) => throw new NotSupportedException();
+    public Task UpdateColorAsync(string machineIp, int probeNo, string color, CancellationToken ct = default) =>
+        UpdateAsync(machineIp, probeNo, new Dictionary<string, object?> { ["color"] = color }, ct);
+
+    public List<LatestReading> LatestReadings { get; } = [];
 
     public Task UpdateChkMonAsync(string machineIp, int probeNo, string value, CancellationToken ct = default)
     {
@@ -257,7 +297,7 @@ internal sealed class FakeMachineRepository(params MasterMachine[] machines) : I
         return Task.CompletedTask;
     }
 
-    public Task<List<LatestReading>> GetLatestReadingsAsync(CancellationToken ct = default) => Task.FromResult(new List<LatestReading>());
+    public Task<List<LatestReading>> GetLatestReadingsAsync(CancellationToken ct = default) => Task.FromResult(LatestReadings.ToList());
 }
 
 // Ported from internal/services/{serial_service,request_probes}_test.go.

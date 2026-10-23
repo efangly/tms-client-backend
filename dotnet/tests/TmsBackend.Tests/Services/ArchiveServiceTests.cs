@@ -46,7 +46,7 @@ internal sealed class FakeArchiveRepository : IArchiveRepository
     }
 
     public Task<List<ArchiveManifest>> ListManifestsAsync(string? startDate, string? endDate, CancellationToken ct = default) =>
-        Task.FromResult(Manifests.Where(m => startDate == null || (string.CompareOrdinal(m.PeriodDate, startDate) >= 0 && string.CompareOrdinal(m.PeriodDate, endDate) <= 0)).ToList());
+        Task.FromResult(Manifests.Where(m => string.IsNullOrEmpty(startDate) || string.IsNullOrEmpty(endDate) || (string.CompareOrdinal(m.PeriodDate, startDate) >= 0 && string.CompareOrdinal(m.PeriodDate, endDate) <= 0)).ToList());
 
     public Task ReplaceArchiveRowsAsync(IReadOnlyList<TempLog> rows, CancellationToken ct = default)
     {

@@ -4,10 +4,14 @@
     <AssemblyName>tms-backend</AssemblyName>
     <RootNamespace>TmsBackend</RootNamespace>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <!-- Overridden at publish time: dotnet publish -p:Version=<git describe> -->
-    <Version>0.0.0-dev</Version>
     <!-- Keep InformationalVersion exactly as passed in (no "+<commit sha>" suffix) -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <!-- Release builds pass -p:Version=<git describe>; local builds report "dev" like the Go binary. -->
+  <PropertyGroup Condition="'$(Version)' == ''">
+    <Version>0.0.0</Version>
+    <InformationalVersion>dev</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

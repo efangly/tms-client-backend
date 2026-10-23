@@ -119,17 +119,20 @@ dotnet/
 - [ ] ทดสอบ poll/alert จริงกับ DB + Legacy API + MQTT จริง (รอยืนยัน — จะเขียน DB dev และส่งข้อมูลออกภายนอก)
 
 ## Phase 5 — HTTP API
-- [ ] Endpoints ตาม `internal/handlers/routes.go` (path/method/status code/JSON body ต้องเหมือนเดิม):
-  - [ ] `GET /health` (status/db/mqtt/version, 503 เมื่อ DB ล่ม)
-  - [ ] Devices: `GET/POST /api/devices`, `GET/PUT/DELETE /api/devices/{id}`
-  - [ ] Machines: `GET /api/machines`, `PUT /api/machines/{machineIp}/{probeNo}`
-  - [ ] Schedule: `GET/PUT .../schedule`, `POST/DELETE .../schedule/{time}` (ดู `docs/schedule-api.md`)
-  - [ ] `GET /api/temp-logs`, `GET /api/reports/templog` (รวม archive cutoff + `applyDeviceFilter`), `GET /api/temp-errors`
-  - [ ] Archive: `POST /api/archive/run`, `GET /api/archive`, `POST /api/archive/restore`
-  - [ ] `POST /api/poll`
-  - [ ] SSE `GET /api/temperature-stream`: event `connected` (+version), `refresh`, `temperature`, heartbeat 30s, unsubscribe เมื่อ client หลุด, ปิดได้ตอน shutdown
-- [ ] CORS allow all, request log
-- [ ] Unit/integration tests ด้วย `WebApplicationFactory` port จาก `handlers_test.go`
+- [x] Endpoints ตาม `internal/handlers/routes.go` (path/method/status code/JSON body ต้องเหมือนเดิม):
+  - [x] `GET /health` (status/db/mqtt/version, 503 เมื่อ DB ล่ม)
+  - [x] Devices: `GET/POST /api/devices`, `GET/PUT/DELETE /api/devices/{id}`
+  - [x] Machines: `GET /api/machines`, `PUT /api/machines/{machineIp}/{probeNo}`
+  - [x] Schedule: `GET/PUT .../schedule`, `POST/DELETE .../schedule/{time}` (ดู `docs/schedule-api.md`)
+  - [x] `GET /api/temp-logs`, `GET /api/reports/templog` (รวม archive cutoff + `applyDeviceFilter`), `GET /api/temp-errors`
+  - [x] Archive: `POST /api/archive/run`, `GET /api/archive`, `POST /api/archive/restore`
+  - [x] `POST /api/poll`
+  - [x] SSE `GET /api/temperature-stream`: event `connected` (+version), `refresh`, `temperature`, heartbeat 30s, unsubscribe เมื่อ client หลุด, ปิดได้ตอน shutdown
+- [x] CORS allow all, request log
+- [x] Integration tests (TestServer + fakes) port จาก `handlers_test.go` รวม SSE
+- [x] **Parity กับ Go บน DB จริง: 22/22 endpoint (GET) ได้ JSON เหมือนกันทุกค่า** + SSE `connected` เหมือนกัน — `tools/parity-goapi` (Go routes ไม่มี polling) + `dotnet run tools/parity-compare.cs`
+- [x] รายละเอียด parity: key ของ `fiber.Map` เรียงตามตัวอักษร, nil slice → `null` (`times`, `series`), BodyParser รับเฉพาะ JSON (อื่นๆ → 400 "Unprocessable Entity"), key ใน body ไม่สนตัวพิมพ์, version build ปกติ = `dev`
+- [x] ลำดับ `series` ในรายงานคงที่ (ตามลำดับที่พบ) — Go สุ่มเพราะวน map
 
 ## Phase 6 — Sub-commands & Parity testing
 - [ ] `tms-backend.exe archive-table <table>` (แทน `script/main.go`)
