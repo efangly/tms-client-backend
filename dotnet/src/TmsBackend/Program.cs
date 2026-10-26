@@ -51,6 +51,8 @@ var options = AppOptions.FromEnvironment(configWarnings.Add);
 
 if (args is ["probe", ..])
     return await ProbeCommand.RunAsync(args, options);
+if (args is ["archive-table", ..])
+    return await ArchiveTableCommand.RunAsync(args, options);
 
 var isService = WindowsServiceHelpers.IsWindowsService();
 StartupDiag.Write($"[4/4] Starting {(isService ? "service" : "console")} on port {options.Port}");

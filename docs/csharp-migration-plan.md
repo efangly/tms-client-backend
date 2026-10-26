@@ -135,13 +135,13 @@ dotnet/
 - [x] ลำดับ `series` ในรายงานคงที่ (ตามลำดับที่พบ) — Go สุ่มเพราะวน map
 
 ## Phase 6 — Sub-commands & Parity testing
-- [ ] `tms-backend.exe archive-table <table>` (แทน `script/main.go`)
-- [ ] `tms-backend.exe --version`
-- [ ] ปรับ Go e2e suite (`e2e/main_test.go`) ให้รับ `E2E_BASE_URL` → ถ้ากำหนดจะยิงไปยัง server ภายนอก (C#) แทนการ boot Fiber in-process; รัน C# ด้วย `POLLING_AUTOSTART=false` + `.env.e2e` เดียวกัน
-- [ ] รัน e2e ทั้งชุดกับ C# ให้ผ่าน (`go test -tags=e2e ./e2e/...`)
-- [ ] รัน Postman collection (`postman/`) กับ C# เทียบ response กับ Go
+- [x] `tms-backend.exe archive-table <table>` (แทน `script/main.go`; รับชื่อตารางจาก `BACKUP_TABLE_NAME` ได้เหมือนเดิม) — `Infrastructure/ArchiveTableCommand.cs`
+- [x] `tms-backend.exe --version`
+- [x] ปรับ Go e2e suite (`e2e/main_test.go`) ให้รับ `E2E_BASE_URL` → ถ้ากำหนดจะยิงไปยัง server ภายนอก (C#) แทนการ boot Fiber in-process; รัน C# ด้วย `POLLING_AUTOSTART=false` + `.env.e2e` เดียวกัน — เพิ่ม `E2E_ARCHIVE_DIR` (path เต็ม ใช้ร่วมกับ `ARCHIVE_DIR` ของ server), สคริปต์ `dotnet/e2e.ps1` สตาร์ท C# จาก temp dir ที่มี `.env.e2e` ซึ่งตัด `MQTT_*`/`LEGACY_API_*` ออก
+- [x] รัน e2e ทั้งชุดกับ C# ให้ผ่าน (`go test -tags=e2e ./e2e/...`) — 7/7 ผ่านด้วย `dotnet/e2e.ps1` บน DB e2e เดิม (`e2e/.env.e2e`); e2e เจอบั๊ก `MQTT_BROKER` ว่างแล้ว C# ล้มตอนเริ่ม → แก้แล้ว + unit test
+- [ ] รัน Postman collection (`postman/`) กับ C# เทียบ response กับ Go — ตรวจแล้วว่าทุก request ใน collection (13 รายการ) มี route ใน C#; การยิงจริง (มี POST/PUT/DELETE) ยังไม่ได้ยิงจริง (e2e suite ครอบคลุม flow เดียวกันแล้ว)
 - [ ] ทดสอบคู่ขนาน (shadow) บนเครื่องทดสอบ: Go กับ C# ชี้ DB ทดสอบแยก, อุปกรณ์จริงชุดเดียว, เทียบ temp_log/temp_error/MQTT payload 1–2 วัน
-- [ ] Restore ไฟล์ archive ที่ Go สร้างไว้ด้วย C# ได้ถูกต้อง
+- [ ] Restore ไฟล์ archive ที่ Go สร้างไว้ด้วย C# ได้ถูกต้อง — ตรวจแล้ว (อ่านอย่างเดียว): ไฟล์ Go ทั้งหมด 2,311 ไฟล์ / 2,024,988 แถว อ่านด้วย C# ได้ครบ และ serialize กลับได้ byte-identical; e2e ทดสอบ restore ลง `temp_log_archive` จริงแล้ว (ไฟล์ที่ C# เขียน); ยังไม่ได้ restore ไฟล์ของ Go ลง DB
 
 ## Phase 7 — Build & Installer (Inno Setup)
 - [ ] `build.ps1`: `dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:Version=$Version` (version: env → `.env` VERSION → `git describe` → dev เหมือน `build.sh`) แล้ว compile `.iss` ด้วย `ISCC.exe`

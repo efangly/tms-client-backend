@@ -9,6 +9,13 @@
 // TCP probe devices don't exist on this network, so polling/alert workflows
 // are exercised against fakeProbeServer (see fake_probe.go), which speaks
 // the real wire protocol from internal/tcpclient/tcpclient.go.
+//
+// Set E2E_BASE_URL (e.g. http://127.0.0.1:18090) to run the same suite against
+// an externally started server — the C# port — instead of the in-process Fiber
+// app. That server must use the same e2e database, POLLING_AUTOSTART=false,
+// no MQTT/Legacy API, and ARCHIVE_DIR equal to E2E_ARCHIVE_DIR (an absolute
+// path, so both sides agree where archive files land). dotnet/e2e.ps1 sets
+// all of this up.
 package e2e
 
 import (
@@ -19,7 +26,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +43,7 @@ import (
 
 var (
 	baseURL    string
+	archiveDir string
 	httpClient = &http.Client{Timeout: 10 * time.Second}
 	probe      *fakeProbeServer
 )
@@ -56,36 +66,52 @@ func TestMain(m *testing.M) {
 		log.Fatalf("e2e: failed to migrate schema: %v", err)
 	}
 
-	// No system tray, no MQTT (unset in .env.e2e), no automatic ticking —
-	// tests trigger polling/archiving explicitly via their HTTP endpoints.
-	services.GlobalMQTTService = nil
-	services.GlobalPollingService = services.NewPollingService()
-	services.GlobalArchiveService = services.NewArchiveService()
+	var app *fiber.App
+	tcpPort := strconv.Itoa(services.DefaultTCPPort())
+	if external := os.Getenv("E2E_BASE_URL"); external != "" {
+		baseURL = strings.TrimRight(external, "/")
+		archiveDir = os.Getenv("E2E_ARCHIVE_DIR")
+		if !filepath.IsAbs(archiveDir) {
+			log.Fatalf("e2e: E2E_ARCHIVE_DIR must be the absolute ARCHIVE_DIR of the server at %s", baseURL)
+		}
+		// The in-process default above was read in init(), before .env.e2e
+		// was loaded; the external server reads it after, so follow it.
+		if p := os.Getenv("DEFAULT_TCP_PORT"); p != "" {
+			tcpPort = p
+		}
+	} else {
+		// No system tray, no MQTT (unset in .env.e2e), no automatic ticking —
+		// tests trigger polling/archiving explicitly via their HTTP endpoints.
+		services.GlobalMQTTService = nil
+		services.GlobalPollingService = services.NewPollingService()
+		services.GlobalArchiveService = services.NewArchiveService()
 
-	// ARCHIVE_DIR/DEFAULT_TCP_PORT are read from the OS environment in each
-	// package's init(), which runs before the godotenv.Load above — so an
-	// ARCHIVE_DIR set only in .env.e2e never takes effect in-process here.
-	// Ask the packages what they actually ended up using instead of
-	// re-reading (and trusting) the env ourselves.
-	archiveDir := services.ArchiveDir()
+		// ARCHIVE_DIR/DEFAULT_TCP_PORT are read from the OS environment in each
+		// package's init(), which runs before the godotenv.Load above — so an
+		// ARCHIVE_DIR set only in .env.e2e never takes effect in-process here.
+		// Ask the packages what they actually ended up using instead of
+		// re-reading (and trusting) the env ourselves.
+		archiveDir = services.ArchiveDir()
+
+		app = fiber.New(fiber.Config{DisableStartupMessage: true})
+		handlers.RegisterRoutes(app)
+
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			log.Fatalf("e2e: failed to open listener: %v", err)
+		}
+		baseURL = "http://" + ln.Addr().String()
+		go func() {
+			if err := app.Listener(ln); err != nil {
+				log.Printf("e2e: server stopped: %v", err)
+			}
+		}()
+	}
+
 	os.RemoveAll(archiveDir)
 	if err := os.MkdirAll(archiveDir, 0755); err != nil {
 		log.Fatalf("e2e: failed to create archive dir: %v", err)
 	}
-
-	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	handlers.RegisterRoutes(app)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		log.Fatalf("e2e: failed to open listener: %v", err)
-	}
-	baseURL = "http://" + ln.Addr().String()
-	go func() {
-		if err := app.Listener(ln); err != nil {
-			log.Printf("e2e: server stopped: %v", err)
-		}
-	}()
 
 	if err := waitForHealth(10 * time.Second); err != nil {
 		log.Fatalf("e2e: server never became healthy: %v", err)
@@ -95,7 +121,6 @@ func TestMain(m *testing.M) {
 	// loopback addresses (127.0.0.1, 127.0.0.2, ...) as separate "machine IP"
 	// identities that all reach the same fake device, keeping each test's
 	// alert-state-machine key independent of run order.
-	tcpPort := strconv.Itoa(services.DefaultTCPPort())
 	probe = newFakeProbeServer("0.0.0.0:" + tcpPort)
 	if err := probe.Start(); err != nil {
 		log.Fatalf("e2e: failed to start fake probe server: %v", err)
@@ -104,7 +129,9 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 
 	probe.Stop()
-	_ = app.ShutdownWithTimeout(2 * time.Second)
+	if app != nil {
+		_ = app.ShutdownWithTimeout(2 * time.Second)
+	}
 	os.RemoveAll(archiveDir)
 	os.Exit(code)
 }

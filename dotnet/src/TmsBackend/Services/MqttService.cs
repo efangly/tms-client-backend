@@ -29,7 +29,7 @@ public sealed class MqttService : BackgroundService, IMqttPublisher
     private readonly AppReadiness _readiness;
     private readonly ILogger<MqttService> _logger;
     private readonly IMqttClient _client;
-    private readonly MqttClientOptions _clientOptions;
+    private readonly MqttClientOptions? _clientOptions;
     private readonly SemaphoreSlim _connectLock = new(1, 1);
     private readonly SemaphoreSlim _disconnected = new(0, 1);
 
@@ -40,14 +40,18 @@ public sealed class MqttService : BackgroundService, IMqttPublisher
         _logger = logger;
         ClientId = options.MqttClientId != "" ? options.MqttClientId : $"tms-backend-{DateTime.UtcNow.Ticks * 100}";
 
-        var builder = new MqttClientOptionsBuilder()
-            .WithTcpServer(options.MqttBroker, int.TryParse(options.MqttPort, out var port) ? port : 1883)
-            .WithClientId(ClientId)
-            .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
-            .WithCleanSession(true);
-        if (options.MqttUsername != "" || options.MqttPassword != "")
-            builder = builder.WithCredentials(options.MqttUsername, options.MqttPassword);
-        _clientOptions = builder.Build();
+        // WithTcpServer rejects an empty host, so only build options when MQTT is configured.
+        if (IsEnabled)
+        {
+            var builder = new MqttClientOptionsBuilder()
+                .WithTcpServer(options.MqttBroker, int.TryParse(options.MqttPort, out var port) ? port : 1883)
+                .WithClientId(ClientId)
+                .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
+                .WithCleanSession(true);
+            if (options.MqttUsername != "" || options.MqttPassword != "")
+                builder = builder.WithCredentials(options.MqttUsername, options.MqttPassword);
+            _clientOptions = builder.Build();
+        }
 
         _client = new MqttClientFactory().CreateMqttClient();
         _client.DisconnectedAsync += e =>
@@ -122,7 +126,7 @@ public sealed class MqttService : BackgroundService, IMqttPublisher
         await _connectLock.WaitAsync(ct);
         try
         {
-            if (_client.IsConnected)
+            if (_client.IsConnected || _clientOptions == null)
                 return;
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromSeconds(30));

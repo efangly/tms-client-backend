@@ -11,7 +11,6 @@ import (
 
 	"tms-backend/internal/database"
 	"tms-backend/internal/models"
-	"tms-backend/internal/services"
 )
 
 // TestArchiveRunAndRestore drives the full archive lifecycle over HTTP: a
@@ -55,7 +54,7 @@ func TestArchiveRunAndRestore(t *testing.T) {
 	}
 
 	// The JSON file was actually written to disk with the archived row.
-	wantFile := filepath.Join(services.ArchiveDir(), "temp_log", oldTime.Format("2006"), oldTime.Format("01"), "temp_log_"+day+".json")
+	wantFile := filepath.Join(archiveDir, "temp_log", oldTime.Format("2006"), oldTime.Format("01"), "temp_log_"+day+".json")
 	data, err := os.ReadFile(wantFile)
 	if err != nil {
 		t.Fatalf("archive file not found at %s: %v", wantFile, err)
