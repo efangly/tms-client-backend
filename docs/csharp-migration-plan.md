@@ -144,17 +144,18 @@ dotnet/
 - [ ] Restore ไฟล์ archive ที่ Go สร้างไว้ด้วย C# ได้ถูกต้อง — ตรวจแล้ว (อ่านอย่างเดียว): ไฟล์ Go ทั้งหมด 2,311 ไฟล์ / 2,024,988 แถว อ่านด้วย C# ได้ครบ และ serialize กลับได้ byte-identical; e2e ทดสอบ restore ลง `temp_log_archive` จริงแล้ว (ไฟล์ที่ C# เขียน); ยังไม่ได้ restore ไฟล์ของ Go ลง DB
 
 ## Phase 7 — Build & Installer (Inno Setup)
-- [ ] `build.ps1`: `dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:Version=$Version` (version: env → `.env` VERSION → `git describe` → dev เหมือน `build.sh`) แล้ว compile `.iss` ด้วย `ISCC.exe`
-- [ ] `installer/tms-backend.iss`:
-  - [ ] ติดตั้งที่ `C:\TMS` (default, เปลี่ยนได้), ต้อง admin
-  - [ ] หน้า wizard กรอก PORT / DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME → เขียน `.env` **เฉพาะเมื่อยังไม่มี** (`onlyifdoesntexist`) ไม่ทับ config เดิมตอน upgrade
-  - [ ] ก่อน copy ไฟล์: `sc stop TMSBackend` + รอจนหยุด (upgrade ทับ exe ได้)
-  - [ ] หลัง copy: `sc create TMSBackend binPath= "C:\TMS\tms-backend.exe" start= delayed-auto DisplayName= "TMS Backend"`, `sc description`, `sc failure TMSBackend reset= 86400 actions= restart/5000/restart/10000/restart/30000`, `sc start`
-  - [ ] Firewall rule เปิดพอร์ต (`netsh advfirewall firewall add rule`)
-  - [ ] ถ้าพบ Go เวอร์ชันเก่า: ลบ registry Run key ของ tray (`tray.RemoveFromStartup` เดิม) + kill process เก่า, ถ้ามี service NSSM ชื่อ `TMSBackend` เดิมให้ลบก่อน
-  - [ ] Start Menu: "Run in console (debug)", "Open logs folder", "Open health check"
-  - [ ] Uninstall: stop + `sc delete` + ลบ firewall rule, **เก็บ** `.env`, `logs/`, `archives/` ไว้
+- [x] `build.ps1`: `dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:Version=$Version` (version: env → `.env` VERSION → `git describe` → dev เหมือน `build.sh`) แล้ว compile `.iss` ด้วย `ISCC.exe` — `dotnet/build.ps1` (รัน unit test → publish single-file 49MB → ตรวจ `--version` ของ exe → ISCC); เลข file version ใช้ x.y.z จาก version ส่วน InformationalVersion ใช้ค่าเต็ม
+- [x] `installer/tms-backend.iss`: — compile ผ่าน ได้ `dotnet/dist/tms-backend-setup-<version>.exe`; Inno Setup 6.7.3 ติดตั้งแบบ per-user ด้วย winget
+  - [x] ติดตั้งที่ `C:\TMS` (default, เปลี่ยนได้), ต้อง admin
+  - [x] หน้า wizard กรอก PORT / DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME → เขียน `.env` **เฉพาะเมื่อยังไม่มี** (`onlyifdoesntexist`) ไม่ทับ config เดิมตอน upgrade; มีหน้า Legacy API + MQTT (ไม่บังคับ) และรับค่าแบบ silent ได้ (`/VERYSILENT /DBHOST=... /DBPASSWORD=...`)
+  - [x] ก่อน copy ไฟล์: `sc stop TMSBackend` + รอจนหยุด (upgrade ทับ exe ได้) (`net stop` ซึ่งรอจนหยุด) + `taskkill` tms-backend.exe ที่ค้าง
+  - [x] หลัง copy: `sc create TMSBackend binPath= "C:\TMS\tms-backend.exe" start= delayed-auto DisplayName= "TMS Backend"`, `sc description`, `sc failure TMSBackend reset= 86400 actions= restart/5000/restart/10000/restart/30000`, `sc start` + `sc failureflag 1` (restart เมื่อ exit code ≠ 0 ด้วย)
+  - [x] Firewall rule เปิดพอร์ต (`netsh advfirewall firewall add rule`)
+  - [x] ถ้าพบ Go เวอร์ชันเก่า: ลบ registry Run key ของ tray (`tray.RemoveFromStartup` เดิม) + kill process เก่า, ถ้ามี service NSSM ชื่อ `TMSBackend` เดิมให้ลบก่อน — service `TMSBackend` เดิม (รวม NSSM) ใช้ `sc config` เปลี่ยน binPath แทนการลบ (sc delete อาจค้างสถานะ pending); ลบ scheduled task `TMS-Backend` ด้วยถ้ามี
+  - [x] Start Menu: "Run in console (debug)", "Open logs folder", "Open health check" + "Edit config (.env)"; console-debug.cmd เตือนให้หยุด service ก่อน (port/COM ใช้ร่วมกันไม่ได้)
+  - [x] Uninstall: stop + `sc delete` + ลบ firewall rule, **เก็บ** `.env`, `logs/`, `archives/` ไว้
 - [ ] สิทธิ์ service account: LocalSystem (default) — ตรวจว่าเข้าถึง COM port และเขียน `C:\TMS\logs`, `archives` ได้
+- [ ] **ทดสอบติดตั้งจริง** (ต้องใช้ admin/UAC): install ใหม่, upgrade ทับ (.env ไม่ถูกทับ), reboot แล้ว service ขึ้นเอง, `taskkill /f` แล้ว restart เอง, uninstall แล้วเหลือ .env/logs/archives — ผู้ใช้ทดสอบติดตั้งผ่านแล้ว (หลังแก้หน้า wizard ที่ scroll ไม่ได้ → แยกเป็น 4 หน้า หน้าละ ≤3 ช่อง); reboot/auto-restart/upgrade/uninstall ยังไม่ได้ยืนยัน
 
 ## Phase 8 — Cutover & Cleanup
 - [ ] ตรวจ `.env` ของทุกเครื่องก่อนติดตั้ง: `POLL_INTERVAL`, `ALERT_INTERVAL`, `DEFAULT_TCP_PORT`, `DEFAULT_SERIAL_*`, `ARCHIVE_*` จะเริ่มมีผลจริงใน C# (Go ไม่สนค่าเหล่านี้)

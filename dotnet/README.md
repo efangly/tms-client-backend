@@ -22,7 +22,9 @@ exe ตัวเดียวทำงานได้ 2 แบบ:
 dotnet/
   TmsBackend.sln
   Directory.Build.props        # net10.0, nullable, warnings = errors
+  build.ps1                    # test → publish single-file → Setup.exe
   e2e.ps1                      # รัน Go e2e suite กับ C# server
+  installer/                   # tms-backend.iss (Inno Setup), console-debug.cmd
   src/TmsBackend/              # exe หลัก (AssemblyName = tms-backend)
     Program.cs                 # host, โหมด console/service, sub-commands
     Config/                    # AppOptions (.env → ค่า config), GoDuration, EnvFile
@@ -66,6 +68,57 @@ dotnet run --project src/TmsBackend      # console mode, อ่าน .env จ�
 
 build ในเครื่องจะแสดง version เป็น `dev` เหมือน Go ส่วน build ที่ปล่อยจริงให้ส่ง `-p:Version=<เลขเวอร์ชัน>`
 (จะทำใน `build.ps1` ใน Phase 7)
+
+---
+
+## Build ตัวติดตั้ง (Setup.exe)
+
+ต้องมี Inno Setup 6 (`winget install JRSoftware.InnoSetup --scope user`)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File dotnet\build.ps1 [-Version 1.2.3] [-SkipTests] [-SkipInstaller]
+```
+
+1. รัน unit tests
+2. `dotnet publish` แบบ single-file + self-contained (เครื่องปลายทางไม่ต้องลง .NET) → `dotnet\publish\tms-backend.exe`
+3. ตรวจว่า exe รายงาน version ถูก
+4. compile `installer\tms-backend.iss` → `dotnet\dist\tms-backend-setup-<version>.exe`
+
+Version: `-Version` / env `VERSION` → `VERSION=` ใน `.env` ของ repo → `git describe` → `dev` (เหมือน `build.sh`)
+
+## ติดตั้ง / อัปเกรด / ถอนการติดตั้ง
+
+Setup.exe ต้องรันแบบ admin สิ่งที่ทำ:
+
+| ขั้นตอน | รายละเอียด |
+|---|---|
+| ก่อน copy ไฟล์ | `net stop TMSBackend` (รอจนหยุด), kill `tms-backend.exe` ที่ค้าง (รวม Go tray ตัวเก่า), ลบ autostart ของ Go (`HKCU\...\Run\TMS-Backend` + `tms-backend-startup.vbs`) |
+| copy | `tms-backend.exe`, `console-debug.cmd` ไปที่ `C:\TMS` (เปลี่ยนได้) |
+| `.env` | เขียนจากหน้า wizard (Server/DB และ Legacy API/MQTT) **เฉพาะเมื่อยังไม่มี** — อัปเกรดแล้ว config เดิมไม่ถูกทับ และหน้า wizard จะถูกข้าม |
+| service | `TMSBackend` (LocalSystem, Automatic (Delayed Start)), restart อัตโนมัติ 5s/10s/30s เมื่อ process ตายหรือออกด้วย error — ถ้ามี service ชื่อนี้อยู่แล้ว (เช่น NSSM ครอบ Go) จะเปลี่ยน binPath แทนการสร้างใหม่ |
+| firewall | rule ขาเข้า "TMS Backend" TCP ตาม `PORT` |
+| Start Menu | console (debug), เปิดโฟลเดอร์ logs, แก้ `.env`, health check |
+
+ติดตั้งแบบเงียบ (rollout หลายเครื่อง):
+
+```bat
+tms-backend-setup-1.2.3.exe /VERYSILENT /SUPPRESSMSGBOXES /DBHOST=10.0.0.5 /DBPASSWORD=xxx /DBNAME=tms_std
+```
+
+พารามิเตอร์: `/PORT /DBHOST /DBPORT /DBUSER /DBPASSWORD /DBNAME /LEGACYURL /LEGACYTOKEN /MQTTBROKER /MQTTTOPIC /MQTTCLIENTID`
+(ใช้เฉพาะตอนยังไม่มี `.env`) — log ของ setup: `/LOG=C:\TMS\setup.log`
+
+ถอนการติดตั้ง: หยุดและลบ service + firewall rule — **`.env`, `logs\`, `archives\` ยังอยู่**
+
+คำสั่งที่ใช้บ่อย (admin):
+
+```bat
+sc query TMSBackend
+net stop TMSBackend
+net start TMSBackend
+```
+
+แก้ `.env` แล้วต้อง restart service ถึงจะมีผล
 
 ---
 
@@ -201,6 +254,6 @@ dotnet run tools/parity-compare.cs -- http://localhost:18081 http://localhost:18
 
 ## ยังไม่ทำ
 
-- `build.ps1` + Setup.exe (Inno Setup), การติดตั้งเป็น service — Phase 7
+- ทดสอบ Setup.exe ติดตั้งจริงเป็น service (ต้องใช้ admin): reboot, auto-restart, upgrade, uninstall — Phase 7
 - shadow run คู่กับ Go บนเครื่องทดสอบ 1–2 วัน และทดสอบ poll จริงกับ Legacy API/MQTT จริง — Phase 6/4
 - pilot และ cutover — Phase 8

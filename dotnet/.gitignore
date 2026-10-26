@@ -1,6 +1,6 @@
 bin/
 obj/
 publish/
-installer/output/
+dist/
 *.user
 .vs/
