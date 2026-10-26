@@ -41,4 +41,22 @@ public static partial class GoDuration
         result = TimeSpan.FromTicks((long)ticks);
         return true;
     }
+
+    /// <summary>Formats back to the short .env style: "5m", "5s", "1h30m", "1.5s", "250ms".</summary>
+    public static string Format(TimeSpan value)
+    {
+        if (value == TimeSpan.Zero)
+            return "0s";
+        if (value < TimeSpan.FromSeconds(1))
+            return value.TotalMilliseconds.ToString(CultureInfo.InvariantCulture) + "ms";
+        var s = "";
+        if (value.Hours + value.Days * 24 > 0)
+            s += $"{value.Hours + value.Days * 24}h";
+        if (value.Minutes > 0)
+            s += $"{value.Minutes}m";
+        var seconds = value.Seconds + value.Milliseconds / 1000.0;
+        if (seconds > 0)
+            s += seconds.ToString(CultureInfo.InvariantCulture) + "s";
+        return s;
+    }
 }

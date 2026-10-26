@@ -1,232 +1,63 @@
-# TMS Backend - Console Application
+# TMS Backend
 
-Go Backend API สำหรับระบบ TMS แบบ Console Application
+Backend ของระบบวัดอุณหภูมิ TMS: REST API + SSE สำหรับ frontend, poll อุปกรณ์วัดอุณหภูมิผ่าน TCP และ COM,
+บันทึกลง MySQL/MariaDB, ตรวจ alert, ส่ง Legacy API + MQTT, และ archive ข้อมูลเก่าเป็นไฟล์ JSON รายวัน
 
-## 🚀 คุณสมบัติ
+> **กำลังย้ายจาก Go ไปเป็น C# (.NET 10)** — เวอร์ชัน C# อยู่ในโฟลเดอร์ [`dotnet/`](dotnet/)
+> ทำงานแทน Go ได้ทันที (API, DB, ไฟล์ archive, MQTT/Legacy API payload เหมือนเดิม)
+> และรันเป็น **Windows Service** ติดตั้งด้วย Setup.exe
+> แผนและสถานะ: [`docs/csharp-migration-plan.md`](docs/csharp-migration-plan.md)
 
-- ✅ Console Window แสดง logs แบบ real-time
-- ✅ ปิดหน้าต่าง = หยุดโปรแกรม
-- ✅ Graceful shutdown เมื่อกด Ctrl+C
-- ✅ Cross-platform build (build บน Mac สำหรับ Windows)
+## เอกสาร
 
-## 📦 Build Instructions
+| เรื่อง | ที่ |
+|---|---|
+| Build, ติดตั้ง/อัปเกรด/ถอน, config `.env`, console vs service, log, การทดสอบ, troubleshooting | [`dotnet/README.md`](dotnet/README.md) |
+| ขั้นตอนเปลี่ยนเครื่องจาก Go → C# (ตรวจ `.env`, pilot, ตรวจหลังติดตั้ง, rollback) | [`dotnet/CUTOVER.md`](dotnet/CUTOVER.md) |
+| API ตาราง schedule | [`docs/schedule-api.md`](docs/schedule-api.md) |
+| Postman collection | [`postman/`](postman/) |
 
-```bash
-./build.sh
-```
+## เริ่มต้นเร็ว (C#)
 
-Output: `build/tms-backend.exe`
+```powershell
+# build exe + Setup.exe  →  dotnet\dist\tms-backend-setup-<version>.exe
+powershell -ExecutionPolicy Bypass -File dotnet\build.ps1
 
-## 🛠️ การติดตั้ง
+# รันแบบ console ระหว่างพัฒนา (อ่าน .env ที่ root ของ repo)
+dotnet run --project dotnet\src\TmsBackend
 
-### 1. สร้างไฟล์ .env
-
-```env
-# Server Configuration
-PORT=8080
-
-# Database Configuration
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=yourpassword
-DB_NAME=tms
-
-# Polling Configuration
-POLL_INTERVAL=5m
-ALERT_INTERVAL=5s
-```
-
-### 2. Deploy ไปยัง Windows
-
-```
-C:\TMS\
-├── tms-backend.exe
-└── .env
-```
-
-### 3. รันโปรแกรม
-
-**Double-click** `tms-backend.exe` หรือรันใน Command Prompt:
-
-```cmd
-cd C:\TMS
-tms-backend.exe
-```
-
-Console window จะปรากฏพร้อม logs:
-```
-Starting TMS Backend Server on port 8080
-Press Ctrl+C or close this window to stop the server
-```
-
-## 🛑 การหยุดโปรแกรม
-
-มี 2 วิธี:
-
-### 1. ปิดหน้าต่าง Console (แนะนำ)
-- คลิกปุ่ม X ที่มุมบนขวา
-- โปรแกรมจะหยุดทันที
-
-### 2. กด Ctrl+C
-- กดใน Console Window
-- โปรแกรมจะทำ graceful shutdown (ปิด connections อย่างถูกต้อง)
-
-## 📡 API Endpoints
-
-เมื่อเซิร์ฟเวอร์ทำงาน:
-
-- Health Check: `http://localhost:8080/health`
-- API Base: `http://localhost:8080/api`
-
-### ทดสอบการทำงาน:
-```cmd
 curl http://localhost:8080/health
 ```
-ควรได้: `{"status":"ok"}`
 
-## 🐛 Troubleshooting
+| วิธีเปิด | โหมด |
+|---|---|
+| ติดตั้งด้วย Setup.exe | Windows Service `TMSBackend` — เริ่มเองตอนบูต (ไม่ต้อง login), restart เองเมื่อ process ตาย |
+| double-click `tms-backend.exe` / Start Menu "console (debug)" | Console — เห็น log สด, Ctrl+C หยุด (ต้องหยุด service ก่อน) |
 
-### ไม่สามารถเชื่อมต่อ Database
-```
-Failed to connect to database: dial tcp :3306: connectex
-```
+คำสั่งเสริมของ exe: `--version`, `check-env` (ตรวจ `.env` ก่อน cutover), `probe <ip|COMx>` (อ่านอุปกรณ์ 1 ครั้ง),
+`archive-table <table>` (archive ตารางสำรอง)
 
-**แก้ไข:**
-1. ตรวจสอบว่า MySQL กำลังทำงาน
-2. ตรวจสอบ credentials ในไฟล์ `.env`
-3. สร้าง database:
-   ```sql
-   CREATE DATABASE tms;
-   ```
+## การทดสอบ
 
-### Port ถูกใช้แล้ว
-```
-bind: address already in use
+```powershell
+dotnet test dotnet\TmsBackend.sln                                    # unit tests (C#)
+powershell -ExecutionPolicy Bypass -File dotnet\e2e.ps1              # e2e suite กับ C# server
+go test -tags=e2e -count=1 ./e2e/...                                 # e2e suite กับ Go (baseline)
 ```
 
-**แก้ไข:**
-- ตรวจสอบ port: `netstat -ano | findstr :8080`
-- เปลี่ยน PORT ในไฟล์ `.env`
-
-### Console ไม่แสดง
-- ตรวจสอบว่าไม่ได้ minimize ไป taskbar
-- ลองรันใน Command Prompt แทน double-click
-
-## 📋 Console Output
-
-**เมื่อเริ่มต้น:**
-```
-Starting TMS Backend Server on port 8080
-Press Ctrl+C or close this window to stop the server
-
-[INFO] GET /health - 200 OK
-[INFO] GET /api/devices - 200 OK
-```
-
-**เมื่อกด Ctrl+C:**
-```
-^C
-Shutting down gracefully...
-Goodbye!
-```
-
-## ⚡ Windows Service (Optional)
-
-ถ้าต้องการให้ทำงานเป็น Background Service ใช้ NSSM:
-
-```cmd
-# ติดตั้ง NSSM
-winget install NSSM
-
-# สร้าง Service
-nssm install TMSBackend "C:\TMS\tms-backend.exe"
-nssm set TMSBackend AppDirectory "C:\TMS"
-nssm start TMSBackend
-```
-
-## 🔧 Development
-
-### Build สำหรับ Windows (จาก Mac)
-```bash
-./build.sh
-```
-
-### Build สำหรับ Mac/Linux
-```bash
-go build -o tms-backend ./main.go
-```
-
-### Run Local
-```bash
-go run main.go
-```
-
-## 📊 Features
-
-- REST API เพื่อจัดการ devices, temperature logs
-- Real-time SSE (Server-Sent Events) streaming
-- Background polling service
-- CORS support
-- Graceful shutdown
-- **Error logging to file** - บันทึก error ลงไฟล์ txt ในโฟลเดอร์ logs
-
-## 📁 Error Logging
-
-ระบบจะบันทึก error logs ทั้งหมดลงไฟล์ txt ในโฟลเดอร์ `logs/`:
-
-### โครงสร้างไฟล์ log:
-```
-logs/
-├── error_2026-02-02.txt
-├── error_2026-02-03.txt
-└── error_2026-02-04.txt
-```
-
-### ข้อมูลที่บันทึก:
-- Database connection errors
-- API request/response errors
-- Temperature polling errors
-- Device communication errors
-- Legacy API notification errors
-
-### ตัวอย่าง log entry:
-```
-[ERROR] 2026/02/02 10:30:45 logger.go:54: pollAndSave - Failed to load devices: connection refused
-[ERROR] 2026/02/02 10:35:12 logger.go:54: GetDevices failed: database connection lost
-[ERROR] 2026/02/02 11:20:33 logger.go:54: API Notification - Failed to send to http://api.example.com: timeout
-```
-
-### การจัดการไฟล์ log:
-- ไฟล์ log จะถูกสร้างใหม่ทุกวัน (ตามวันที่)
-- Error จะถูกเขียนลงไฟล์พร้อมกับแสดงใน console
-- โฟลเดอร์ `logs/` จะถูกสร้างอัตโนมัติ
-- ไฟล์ log เก่าจะไม่ถูกลบอัตโนมัติ (ต้องลบด้วยตนเอง)
-
-### ดู log file:
-**Windows:**
-```cmd
-cd C:\TMS\logs
-type error_2026-02-02.txt
-```
-
-**Mac/Linux:**
-```bash
-cd logs
-cat error_2026-02-02.txt
-```
-
-## 📝 สรุป
-
-| Feature | Description |
-|---------|-------------|
-| **Console Mode** | ✅ แสดง logs ใน console window |
-| **Stop Method** | ปิด window หรือ Ctrl+C |
-| **Logs** | Real-time logs ใน console |
-| **Background** | ❌ ต้องมี console window |
-| **Size** | ~8.6 MB |
+e2e ใช้ DB แยก (`e2e/.env.e2e` — ดู `e2e/.env.e2e.example`) และ **ลบข้อมูลทุกแถว** ในตารางที่ใช้ ห้ามชี้ไปที่ DB จริง
 
 ---
 
-**Updated:** February 2, 2026  
-**Version:** Console Application (Simple Mode)
+## เวอร์ชัน Go (เดิม — ใช้จนกว่าจะ cutover ครบทุกเครื่อง)
+
+โค้ด Go (`main.go`, `internal/`, `script/`) ยังอยู่เพื่อใช้ rollback และเป็น baseline ของ e2e
+จะลบออกหลัง C# เสถียรบนทุกเครื่องแล้ว
+
+- Build: `./build.sh` (บน Mac/Linux/Git Bash) → `build/tms-backend.exe` (tray app, ไม่มี console)
+- รัน: double-click → ไอคอนใน system tray, คลิกขวา → **Run at Windows Startup** เพื่อให้เปิดเองตอน login
+- log error: `logs/error_YYYY-MM-DD.txt`
+- ข้อจำกัดที่ C# แก้แล้ว: ไม่ใช่ service จริง (เริ่มหลัง user login เท่านั้น), ไม่สนใจ `POLL_INTERVAL` /
+  `ALERT_INTERVAL` / `DEFAULT_*` / `ARCHIVE_*` ใน `.env`, เลิก retry DB หลัง 5 ครั้ง
+
+Rollback จาก C# กลับ Go: ดู [`dotnet/CUTOVER.md`](dotnet/CUTOVER.md#4-rollback-กลับไปใช้-go)

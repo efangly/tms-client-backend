@@ -51,6 +51,8 @@ var options = AppOptions.FromEnvironment(configWarnings.Add);
 
 if (args is ["probe", ..])
     return await ProbeCommand.RunAsync(args, options);
+if (args is ["check-env"])
+    return await CheckEnvCommand.RunAsync(options, envPath, configWarnings);
 if (args is ["archive-table", ..])
     return await ArchiveTableCommand.RunAsync(args, options);
 

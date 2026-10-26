@@ -155,10 +155,13 @@ net start TMSBackend
 ```text
 tms-backend.exe                        # รัน server (console หรือ service)
 tms-backend.exe --version              # พิมพ์ version แล้วออก (-v ก็ได้)
+tms-backend.exe check-env              # ตรวจ .env: ค่าที่ใช้จริง (ซ่อน secret), ค่าผิดรูปแบบ, ค่าที่ต่างจาก Go, ping DB
 tms-backend.exe probe <ip|COMx> [cmd]  # อ่านอุปกรณ์ 1 ครั้ง แสดง frame ดิบ + ค่าที่ parse ได้ (cmd default "A")
 tms-backend.exe archive-table <table>  # archive ตารางสำรองที่ schema เหมือน temp_log (แทน script/main.go)
 ```
 
+- `check-env` ใช้ก่อน cutover แต่ละเครื่อง (ดู [`CUTOVER.md`](CUTOVER.md)) — อ่าน `.env` ข้าง exe ก่อน
+  ถ้าไม่มีจะใช้ `.env` ในโฟลเดอร์ที่สั่งรัน จึงสั่งจากโฟลเดอร์ Go เดิมได้โดยไม่ต้องติดตั้ง; exit code 0 = พร้อม, 1 = มีรายการต้องดู
 - `probe` ใช้ตรวจหน้างานโดยไม่ต้องเปิด server — **ถ้าจะทดสอบ COM ต้องหยุด service ก่อน**
   เพราะ COM port เปิดได้ทีละ process
 - `archive-table` รับชื่อตารางจาก `BACKUP_TABLE_NAME` ได้เหมือน script เดิม ไฟล์ที่ได้อยู่ใน series
@@ -256,4 +259,5 @@ dotnet run tools/parity-compare.cs -- http://localhost:18081 http://localhost:18
 
 - ทดสอบ Setup.exe ติดตั้งจริงเป็น service (ต้องใช้ admin): reboot, auto-restart, upgrade, uninstall — Phase 7
 - shadow run คู่กับ Go บนเครื่องทดสอบ 1–2 วัน และทดสอบ poll จริงกับ Legacy API/MQTT จริง — Phase 6/4
-- pilot และ cutover — Phase 8
+- pilot และ rollout ตาม [`CUTOVER.md`](CUTOVER.md) — Phase 8
+- ลบโค้ด Go หลัง C# เสถียรทุกเครื่อง (e2e suite ใน `e2e/` ใช้ package ของ Go อยู่ ต้องย้าย/ปรับก่อน)

@@ -28,4 +28,17 @@ public class GoDurationTests
     {
         Assert.False(GoDuration.TryParse(input, out _));
     }
+
+    [Theory]
+    [InlineData("5m")]
+    [InlineData("5s")]
+    [InlineData("1h30m")]
+    [InlineData("1.5s")]
+    [InlineData("500ms")]
+    [InlineData("25h")]
+    public void Format_round_trips(string input)
+    {
+        Assert.True(GoDuration.TryParse(input, out var ts));
+        Assert.Equal(input, GoDuration.Format(ts));
+    }
 }

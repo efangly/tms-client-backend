@@ -158,11 +158,11 @@ dotnet/
 - [ ] **ทดสอบติดตั้งจริง** (ต้องใช้ admin/UAC): install ใหม่, upgrade ทับ (.env ไม่ถูกทับ), reboot แล้ว service ขึ้นเอง, `taskkill /f` แล้ว restart เอง, uninstall แล้วเหลือ .env/logs/archives — ผู้ใช้ทดสอบติดตั้งผ่านแล้ว (หลังแก้หน้า wizard ที่ scroll ไม่ได้ → แยกเป็น 4 หน้า หน้าละ ≤3 ช่อง); reboot/auto-restart/upgrade/uninstall ยังไม่ได้ยืนยัน
 
 ## Phase 8 — Cutover & Cleanup
-- [ ] ตรวจ `.env` ของทุกเครื่องก่อนติดตั้ง: `POLL_INTERVAL`, `ALERT_INTERVAL`, `DEFAULT_TCP_PORT`, `DEFAULT_SERIAL_*`, `ARCHIVE_*` จะเริ่มมีผลจริงใน C# (Go ไม่สนค่าเหล่านี้)
-- [ ] Deploy เครื่อง pilot 1 เครื่อง ด้วย setup.exe ทับ Go เดิม ตรวจ: service start หลัง reboot, auto-restart เมื่อ kill process, frontend/SSE ใช้ได้, log ถูกที่
+- [ ] ตรวจ `.env` ของทุกเครื่องก่อนติดตั้ง: `POLL_INTERVAL`, `ALERT_INTERVAL`, `DEFAULT_TCP_PORT`, `DEFAULT_SERIAL_*`, `ARCHIVE_*` จะเริ่มมีผลจริงใน C# (Go ไม่สนค่าเหล่านี้) — เพิ่มคำสั่ง `tms-backend.exe check-env` (แสดงค่าที่ใช้จริงแบบซ่อน secret, ค่าผิดรูปแบบ, ค่าที่ต่างจาก Go, ping DB; exit 1 เมื่อมีรายการต้องดู) + ขั้นตอนใน `dotnet/CUTOVER.md`; **ยังต้องรันบนทุกเครื่องจริง**
+- [ ] Deploy เครื่อง pilot 1 เครื่อง ด้วย setup.exe ทับ Go เดิม ตรวจ: service start หลัง reboot, auto-restart เมื่อ kill process, frontend/SSE ใช้ได้, log ถูกที่ — checklist ตรวจหลังติดตั้ง + rollback อยู่ใน `dotnet/CUTOVER.md`
 - [ ] Rollout เครื่องที่เหลือ
-- [ ] อัปเดต `README.md` (ภาษาไทย): build, ติดตั้ง, console vs service, troubleshooting
-- [ ] หลังเสถียร: ลบโค้ด Go (`main.go`, `internal/`, `script/`, `build.sh`, `debug.sh`, `go.mod`) และย้าย e2e เป็น C# (หรือเก็บ Go e2e ไว้เป็น black-box suite)
+- [x] อัปเดต `README.md` (ภาษาไทย): build, ติดตั้ง, console vs service, troubleshooting — root `README.md` เขียนใหม่เป็นภาพรวม + ลิงก์ (เนื้อหาเต็มอยู่ใน `dotnet/README.md`), เก็บส่วน Go ไว้สั้น ๆ สำหรับ rollback
+- [ ] หลังเสถียร: ลบโค้ด Go (`main.go`, `internal/`, `script/`, `build.sh`, `debug.sh`, `go.mod`) และย้าย e2e เป็น C# (หรือเก็บ Go e2e ไว้เป็น black-box suite) — **ยังไม่ทำ**: ต้องรอ C# เสถียรทุกเครื่อง; e2e ใน `e2e/` import package ของ Go (database/models/services) ต้องเขียน helper ใหม่ก่อนลบ
 
 ---
 
