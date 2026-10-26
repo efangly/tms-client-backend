@@ -186,6 +186,16 @@ tms-backend.exe archive-table <table>  # archive ตารางสำรอง�
 `dotnet test TmsBackend.sln` — port มาจาก test ของ Go ทั้งหมด (parser ใช้ test vector hex ชุดเดียวกัน),
 endpoint ทดสอบด้วย TestHost + repository ปลอม
 
+### Restore ไฟล์ archive ของ Go ลง DB (เขียน DB — ใช้ DB ทดสอบเท่านั้น)
+
+```powershell
+$env:TMS_ARCHIVE_SMOKE = 'D:\dev\tms-client-backend\e2e\.env.e2e'   # DB_NAME ต้องมีคำว่า test หรือ e2e
+$env:TMS_GO_ARCHIVE_DIR = 'D:\dev\tms-client-backend\archives\temp_log'
+dotnet test TmsBackend.sln --filter GoArchiveRestoreSmoke
+```
+
+ใช้ไฟล์ล่าสุด 3 ไฟล์: ลง manifest → `RestoreRangeAsync` → เทียบทุกแถวใน `temp_log_archive` กับไฟล์ แล้วล้างทิ้ง
+
 ### E2E (Go black-box suite กับ C# server)
 
 ```powershell
@@ -222,10 +232,11 @@ dotnet run tools/parity-compare.cs -- http://localhost:18081 http://localhost:18
 
 | รายการ | ผล |
 |---|---|
-| Unit tests | 170/170 ผ่าน |
+| Unit tests | 180/180 ผ่าน |
 | E2E suite (7 tests) กับ C# | ผ่านทั้งหมด — ชุดเดียวกับที่ Go in-process ผ่าน |
 | GET endpoints เทียบ Go บน DB dev (22 รายการ) + SSE `connected` | เหมือนกันทุกรายการ |
 | ไฟล์ archive ที่ Go สร้าง (2,311 ไฟล์ / 2,024,988 แถว) | C# อ่านได้ครบ, serialize กลับได้ byte-identical |
+| Restore ไฟล์ Go ลง `temp_log_archive` (3 วัน / 2,656 แถว, DB e2e) | ตรงกับไฟล์ทุกแถวทุก field |
 | อุปกรณ์จริง TCP `192.168.1.111` และ `COM4` | อ่านค่าได้ถูกต้อง (ผ่านคำสั่ง `probe`) |
 
 ---

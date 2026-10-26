@@ -141,7 +141,7 @@ dotnet/
 - [x] รัน e2e ทั้งชุดกับ C# ให้ผ่าน (`go test -tags=e2e ./e2e/...`) — 7/7 ผ่านด้วย `dotnet/e2e.ps1` บน DB e2e เดิม (`e2e/.env.e2e`); e2e เจอบั๊ก `MQTT_BROKER` ว่างแล้ว C# ล้มตอนเริ่ม → แก้แล้ว + unit test
 - [ ] รัน Postman collection (`postman/`) กับ C# เทียบ response กับ Go — ตรวจแล้วว่าทุก request ใน collection (13 รายการ) มี route ใน C#; การยิงจริง (มี POST/PUT/DELETE) ยังไม่ได้ยิงจริง (e2e suite ครอบคลุม flow เดียวกันแล้ว)
 - [ ] ทดสอบคู่ขนาน (shadow) บนเครื่องทดสอบ: Go กับ C# ชี้ DB ทดสอบแยก, อุปกรณ์จริงชุดเดียว, เทียบ temp_log/temp_error/MQTT payload 1–2 วัน
-- [ ] Restore ไฟล์ archive ที่ Go สร้างไว้ด้วย C# ได้ถูกต้อง — ตรวจแล้ว (อ่านอย่างเดียว): ไฟล์ Go ทั้งหมด 2,311 ไฟล์ / 2,024,988 แถว อ่านด้วย C# ได้ครบ และ serialize กลับได้ byte-identical; e2e ทดสอบ restore ลง `temp_log_archive` จริงแล้ว (ไฟล์ที่ C# เขียน); ยังไม่ได้ restore ไฟล์ของ Go ลง DB
+- [x] Restore ไฟล์ archive ที่ Go สร้างไว้ด้วย C# ได้ถูกต้อง — ตรวจแล้ว (อ่านอย่างเดียว): ไฟล์ Go ทั้งหมด 2,311 ไฟล์ / 2,024,988 แถว อ่านด้วย C# ได้ครบ และ serialize กลับได้ byte-identical; e2e ทดสอบ restore ลง `temp_log_archive` จริงแล้ว (ไฟล์ที่ C# เขียน); restore ไฟล์ของ Go ลง DB e2e แล้ว (3 วัน / 2,656 แถว ตรงกับไฟล์ทุก field) ด้วย `GoArchiveRestoreSmokeTests` (opt-in `TMS_ARCHIVE_SMOKE` + `TMS_GO_ARCHIVE_DIR`)
 
 ## Phase 7 — Build & Installer (Inno Setup)
 - [x] `build.ps1`: `dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:Version=$Version` (version: env → `.env` VERSION → `git describe` → dev เหมือน `build.sh`) แล้ว compile `.iss` ด้วย `ISCC.exe` — `dotnet/build.ps1` (รัน unit test → publish single-file 49MB → ตรวจ `--version` ของ exe → ISCC); เลข file version ใช้ x.y.z จาก version ส่วน InformationalVersion ใช้ค่าเต็ม
