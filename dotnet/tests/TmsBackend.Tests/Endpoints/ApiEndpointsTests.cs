@@ -12,6 +12,7 @@ using TmsBackend.Data;
 using TmsBackend.Endpoints;
 using TmsBackend.Infrastructure;
 using TmsBackend.Json;
+using TmsBackend.Logging;
 using TmsBackend.Models;
 using TmsBackend.Services;
 using TmsBackend.Tests.Services;
@@ -30,6 +31,7 @@ internal sealed class ApiFixture : IAsyncDisposable
     public FakeDbPing Db { get; } = new();
     public FakeMqtt Mqtt { get; } = new(connected: false);
     public EventHub Events { get; } = new();
+    public LogStreamProvider LogStream { get; } = new(capacity: 10);
     public ManualTimeProvider Time { get; } = ManualTimeProvider.AtThai(2026, 10, 22, 8, 0);
     public string ArchiveDir { get; } = Directory.CreateTempSubdirectory().FullName;
 
@@ -53,6 +55,7 @@ internal sealed class ApiFixture : IAsyncDisposable
         s.AddSingleton<IDbPing>(Db);
         s.AddSingleton<IMqttPublisher>(Mqtt);
         s.AddSingleton(Events);
+        s.AddSingleton(LogStream);
         s.AddSingleton<TimeProvider>(Time);
         s.AddSingleton(new ArchiveService(Archive, options, new AppReadiness(), Time, NullLogger<ArchiveService>.Instance));
         s.AddSingleton(new PollingService(Machines, Logs, Errors, Probes, new FakeLegacyApi(false), Mqtt, Db, Events,
@@ -486,5 +489,97 @@ public class TemperatureStreamTests : IAsyncLifetime
         while (_f.Events.SubscriberCount > 0 && DateTime.UtcNow < until)
             await Task.Delay(10);
         Assert.Equal(0, _f.Events.SubscriberCount);
+    }
+}
+
+public class LogStreamTests : IAsyncLifetime
+{
+    private readonly ApiFixture _f = new();
+
+    public Task InitializeAsync() => _f.StartAsync();
+
+    public async Task DisposeAsync() => await _f.DisposeAsync();
+
+    private ILogger Log => _f.LogStream.CreateLogger("TmsBackend.Services.PollingService");
+
+    private static Func<Task<string>> Reader(HttpResponseMessage res)
+    {
+        var reader = new StreamReader(res.Content.ReadAsStream());
+        return async () =>
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            string? line;
+            while ((line = await reader.ReadLineAsync(cts.Token)) == "")
+            {
+            }
+            return line!;
+        };
+    }
+
+    private async Task WaitForSubscriber()
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (_f.LogStream.SubscriberCount == 0 && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+    }
+
+    [Fact]
+    public async Task Sends_history_then_live_entries_filtered_by_level()
+    {
+        Log.LogInformation("old info");
+        Log.LogWarning("old warning");
+
+        using var res = await _f.Client.GetAsync("/api/log-stream?level=warning", HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal("text/event-stream", res.Content.Headers.ContentType?.MediaType ?? res.Headers.GetValues("Content-Type").First());
+        var next = Reader(res);
+
+        Assert.Equal($"data: {{\"type\":\"connected\",\"version\":\"{AppVersion.Value}\"}}", await next());
+        Assert.Equal("id: 2", await next());
+        var old = await next();
+        Assert.StartsWith("data: {\"category\":\"PollingService\",\"exception\":null,\"id\":2,\"level\":\"warning\",\"message\":\"old warning\",\"time\":\"", old);
+        Assert.EndsWith("\"type\":\"log\"}", old);
+
+        await WaitForSubscriber();
+        Log.LogInformation("new info");
+        Log.LogError(new InvalidOperationException("boom"), "new error");
+
+        Assert.Equal("id: 4", await next());
+        var err = await next();
+        Assert.Contains("\"level\":\"error\",\"message\":\"new error\"", err);
+        Assert.Contains("InvalidOperationException: boom", err);
+    }
+
+    [Fact]
+    public async Task History_limits_backlog_and_last_event_id_resumes()
+    {
+        for (var i = 1; i <= 5; i++)
+            Log.LogInformation("m{I}", i);
+
+        using (var res = await _f.Client.GetAsync("/api/log-stream?history=2", HttpCompletionOption.ResponseHeadersRead))
+        {
+            var next = Reader(res);
+            await next(); // connected
+            Assert.Equal("id: 4", await next());
+            await next();
+            Assert.Equal("id: 5", await next());
+        }
+
+        var req = new HttpRequestMessage(HttpMethod.Get, "/api/log-stream?history=0");
+        req.Headers.Add("Last-Event-ID", "3");
+        using var resumed = await _f.Client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+        var read = Reader(resumed);
+        await read(); // connected
+        Assert.Equal("id: 4", await read());
+    }
+
+    [Theory]
+    [InlineData("level=debug")]
+    [InlineData("history=-1")]
+    [InlineData("history=11")]
+    public async Task Rejects_bad_query(string query)
+    {
+        var res = await _f.Client.GetAsync("/api/log-stream?" + query);
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal(0, _f.LogStream.SubscriberCount);
     }
 }

@@ -177,6 +177,32 @@ tms-backend.exe archive-table <table>  # archive ตารางสำรอง�
 | `logs/error_YYYY-MM-DD.txt` (ข้าง exe) | เฉพาะ Error ขึ้นไป, ลบไฟล์เก่ากว่า 30 วันอัตโนมัติ |
 | Windows Event Log (Application, source `TMSBackend`) | Warning ขึ้นไป — เฉพาะตอนรันเป็น service |
 | `%TEMP%\tms-backend-startup.log` และ `startup_debug.log` | ขั้นตอนตอนเริ่มโปรแกรม (จำกัด 200KB) ใช้ดูว่าทำไม service ไม่ขึ้น |
+| SSE `GET /api/log-stream` | Information ขึ้นไป แบบสด ทั้งโหมด console และ service — เก็บ 500 บรรทัดล่าสุดไว้ในหน่วยความจำ |
+
+### Log ผ่าน SSE (`/api/log-stream`)
+
+ใช้แสดง log ในหน้า frontend ได้โดยไม่ต้องหยุด service (ไม่มีใน Go)
+
+| query | ค่า |
+|---|---|
+| `level` | `info` (default), `warning`, `error`, `critical` — ส่งเฉพาะระดับนั้นขึ้นไป |
+| `history` | จำนวน log ย้อนหลังที่ส่งตอนเชื่อมต่อ `0`–`500` (default `100`) |
+
+- event แรก `{"type":"connected","version":"..."}` ตามด้วย log ทีละ event:
+  `{"category":"PollingService","exception":null,"id":42,"level":"warning","message":"...","time":"2026-10-26 17:06:28.756","type":"log"}`
+  (`exception` = stack trace เมื่อมี)
+- ทุก event มี `id:` — `EventSource` ต่อใหม่เองพร้อม `Last-Event-ID` แล้ว server ส่งต่อจากบรรทัดถัดไป
+  (ไม่ซ้ำ ไม่ขาด ถ้ายังอยู่ใน buffer 500 บรรทัด); `id` ที่กระโดดแปลว่ามี log หลุด (client ช้าเกิน 256 บรรทัด)
+- heartbeat `: heartbeat` ทุก 30 วินาที เหมือน `/api/temperature-stream`
+- **API ไม่มี auth** ใครเข้าถึงพอร์ตได้ก็เห็น log (IP อุปกรณ์, ข้อความ error ของ DB) — ไม่มีรหัสผ่าน/token ใน log
+
+```js
+const es = new EventSource(`${API}/api/log-stream?level=info&history=200`);
+es.onmessage = (ev) => {
+  const e = JSON.parse(ev.data);
+  if (e.type === 'log') appendLine(`${e.time} [${e.level}] ${e.category}: ${e.message}`);
+};
+```
 
 ---
 
@@ -232,7 +258,7 @@ dotnet run tools/parity-compare.cs -- http://localhost:18081 http://localhost:18
 
 | รายการ | ผล |
 |---|---|
-| Unit tests | 180/180 ผ่าน |
+| Unit tests | 189/189 ผ่าน |
 | E2E suite (7 tests) กับ C# | ผ่านทั้งหมด — ชุดเดียวกับที่ Go in-process ผ่าน |
 | GET endpoints เทียบ Go บน DB dev (22 รายการ) + SSE `connected` | เหมือนกันทุกรายการ |
 | ไฟล์ archive ที่ Go สร้าง (2,311 ไฟล์ / 2,024,988 แถว) | C# อ่านได้ครบ, serialize กลับได้ byte-identical |
@@ -254,6 +280,7 @@ dotnet run tools/parity-compare.cs -- http://localhost:18081 http://localhost:18
   (Go ส่งชื่อ key ไปเป็นชื่อ column ตรง ๆ)
 - **ลำดับ series ใน `/api/reports/templog`** เรียงตามลำดับที่เจอข้อมูล (Go สุ่มเพราะวนจาก map)
 - **บังคับ invariant culture** — เครื่องที่ตั้ง locale ไทยจะไม่ได้ปี พ.ศ. ใน log/วันที่
+- **เพิ่ม `GET /api/log-stream`** (SSE ของ log) — endpoint เดิมทั้งหมดไม่เปลี่ยน
 - `MQTT_BROKER` ว่าง → ปิด MQTT เฉย ๆ (บั๊กที่ e2e เจอและแก้แล้ว: เดิม C# ล้มตอนเริ่ม)
 
 ## Troubleshooting

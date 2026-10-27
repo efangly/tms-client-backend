@@ -54,6 +54,9 @@ public static class ApiEndpoints
         api.MapPost("/poll", TriggerPoll);
 
         api.MapGet("/temperature-stream", TemperatureStream.HandleAsync);
+
+        // Not in the Go build: live application log for the frontend.
+        api.MapGet("/log-stream", LogStream.HandleAsync);
     }
 
     // ── Health ───────────────────────────────────────────────────────────────

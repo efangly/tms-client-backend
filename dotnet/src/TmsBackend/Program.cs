@@ -83,6 +83,9 @@ builder.Logging.AddSimpleConsole(o =>
     o.TimestampFormat = "yyyy/MM/dd HH:mm:ss ";
 });
 builder.Logging.AddProvider(new ErrorFileLoggerProvider(Path.Combine(exeDir, "logs")));
+var logStream = new LogStreamProvider();
+builder.Logging.AddProvider(logStream);
+builder.Services.AddSingleton(logStream);
 if (isService && OperatingSystem.IsWindows())
 {
     builder.Logging.AddEventLog(new EventLogSettings { SourceName = ServiceName });
