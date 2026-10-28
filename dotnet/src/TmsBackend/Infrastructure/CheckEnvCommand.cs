@@ -92,6 +92,7 @@ public static class CheckEnvCommand
         yield return ("POLL_INTERVAL", GoDuration.Format(o.PollInterval));
         yield return ("ALERT_INTERVAL", GoDuration.Format(o.AlertInterval));
         yield return ("POLLING_AUTOSTART", o.PollingAutostart ? "true" : "false");
+        yield return ("LOG_STREAM_ENABLED", o.LogStreamEnabled ? "true" : "false");
         yield return ("DEFAULT_TCP_PORT", o.DefaultTcpPort.ToString());
         yield return ("DEFAULT_SERIAL_BAUD", o.DefaultSerialBaud.ToString());
         yield return ("DEFAULT_SERIAL_BOOT_DELAY", ((int)o.DefaultSerialBootDelay.TotalSeconds).ToString());

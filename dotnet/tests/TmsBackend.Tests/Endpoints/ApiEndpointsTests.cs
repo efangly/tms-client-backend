@@ -21,7 +21,7 @@ using TmsBackend.Tests.Transport;
 namespace TmsBackend.Tests.Endpoints;
 
 /// <summary>The real route table on an in-memory server, backed by fakes (Go: handlers_test.go).</summary>
-internal sealed class ApiFixture : IAsyncDisposable
+internal sealed class ApiFixture(bool logStream = true) : IAsyncDisposable
 {
     public FakeMachineRepository Machines { get; } = new();
     public FakeTempLogRepository Logs { get; } = new();
@@ -55,7 +55,8 @@ internal sealed class ApiFixture : IAsyncDisposable
         s.AddSingleton<IDbPing>(Db);
         s.AddSingleton<IMqttPublisher>(Mqtt);
         s.AddSingleton(Events);
-        s.AddSingleton(LogStream);
+        if (logStream)
+            s.AddSingleton(LogStream);
         s.AddSingleton<TimeProvider>(Time);
         s.AddSingleton(new ArchiveService(Archive, options, new AppReadiness(), Time, NullLogger<ArchiveService>.Instance));
         s.AddSingleton(new PollingService(Machines, Logs, Errors, Probes, new FakeLegacyApi(false), Mqtt, Db, Events,
@@ -581,5 +582,21 @@ public class LogStreamTests : IAsyncLifetime
         var res = await _f.Client.GetAsync("/api/log-stream?" + query);
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
         Assert.Equal(0, _f.LogStream.SubscriberCount);
+    }
+}
+
+public class LogStreamDisabledTests : IAsyncLifetime
+{
+    private readonly ApiFixture _f = new(logStream: false);
+
+    public Task InitializeAsync() => _f.StartAsync();
+
+    public async Task DisposeAsync() => await _f.DisposeAsync();
+
+    [Fact]
+    public async Task Route_is_not_found_when_disabled()
+    {
+        var res = await _f.Client.GetAsync("/api/log-stream");
+        Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
     }
 }

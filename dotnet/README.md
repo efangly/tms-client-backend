@@ -135,6 +135,7 @@ net start TMSBackend
 | `POLL_INTERVAL` | `5m` | รูปแบบ Go duration: `30s`, `5m`, `1h30m` |
 | `ALERT_INTERVAL` | `5s` | |
 | `POLLING_AUTOSTART` | `true` | **ใหม่** — `false` = ไม่ poll/archive อัตโนมัติ (ใช้กับ e2e; สั่งผ่าน `POST /api/poll` ได้) |
+| `LOG_STREAM_ENABLED` | `true` | **ใหม่** — `false` = ปิด `GET /api/log-stream` (ตอบ 404, ไม่เก็บ log ในหน่วยความจำ) |
 | `DEFAULT_TCP_PORT` | `8899` | พอร์ตของ probe TCP |
 | `DEFAULT_SERIAL_BAUD` | `9600` | |
 | `DEFAULT_SERIAL_BOOT_DELAY` | `2` | วินาที รอ MCU บูตหลังเปิด COM |
@@ -194,7 +195,7 @@ tms-backend.exe archive-table <table>  # archive ตารางสำรอง�
 - ทุก event มี `id:` — `EventSource` ต่อใหม่เองพร้อม `Last-Event-ID` แล้ว server ส่งต่อจากบรรทัดถัดไป
   (ไม่ซ้ำ ไม่ขาด ถ้ายังอยู่ใน buffer 500 บรรทัด); `id` ที่กระโดดแปลว่ามี log หลุด (client ช้าเกิน 256 บรรทัด)
 - heartbeat `: heartbeat` ทุก 30 วินาที เหมือน `/api/temperature-stream`
-- **API ไม่มี auth** ใครเข้าถึงพอร์ตได้ก็เห็น log (IP อุปกรณ์, ข้อความ error ของ DB) — ไม่มีรหัสผ่าน/token ใน log
+- **API ไม่มี auth** ใครเข้าถึงพอร์ตได้ก็เห็น log (IP อุปกรณ์, ข้อความ error ของ DB) — ไม่มีรหัสผ่าน/token ใน log — ปิดได้ด้วย `LOG_STREAM_ENABLED=false` ใน `.env` (ต้อง restart service)
 
 ```js
 const es = new EventSource(`${API}/api/log-stream?level=info&history=200`);

@@ -4,6 +4,7 @@ using TmsBackend.Config;
 using TmsBackend.Data;
 using TmsBackend.Infrastructure;
 using TmsBackend.Json;
+using TmsBackend.Logging;
 using TmsBackend.Models;
 using TmsBackend.Services;
 
@@ -56,7 +57,9 @@ public static class ApiEndpoints
         api.MapGet("/temperature-stream", TemperatureStream.HandleAsync);
 
         // Not in the Go build: live application log for the frontend.
-        api.MapGet("/log-stream", LogStream.HandleAsync);
+        // Registered only when LOG_STREAM_ENABLED is on; otherwise the route is a 404.
+        if (app.ServiceProvider.GetService<LogStreamProvider>() != null)
+            api.MapGet("/log-stream", LogStream.HandleAsync);
     }
 
     // ── Health ───────────────────────────────────────────────────────────────

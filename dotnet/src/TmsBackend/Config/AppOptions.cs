@@ -24,6 +24,8 @@ public sealed record AppOptions
     public TimeSpan AlertInterval { get; init; } = TimeSpan.FromSeconds(5);
     /// <summary>False disables automatic polling/archiving ticks (e2e runs trigger them over HTTP).</summary>
     public bool PollingAutostart { get; init; } = true;
+    /// <summary>False removes GET /api/log-stream (and its in-memory log buffer).</summary>
+    public bool LogStreamEnabled { get; init; } = true;
 
     // Probe transports
     public int DefaultTcpPort { get; init; } = 8899;
@@ -102,6 +104,7 @@ public sealed record AppOptions
             PollInterval = Dur("POLL_INTERVAL", d.PollInterval),
             AlertInterval = Dur("ALERT_INTERVAL", d.AlertInterval),
             PollingAutostart = Bool("POLLING_AUTOSTART", d.PollingAutostart),
+            LogStreamEnabled = Bool("LOG_STREAM_ENABLED", d.LogStreamEnabled),
             DefaultTcpPort = Int("DEFAULT_TCP_PORT", d.DefaultTcpPort, n => n is > 0 and < 65536),
             DefaultSerialBaud = Int("DEFAULT_SERIAL_BAUD", d.DefaultSerialBaud, n => n > 0),
             // Seconds, as in serial_service.go

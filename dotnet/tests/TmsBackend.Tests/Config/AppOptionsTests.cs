@@ -8,7 +8,7 @@ public class AppOptionsTests : IDisposable
 {
     private static readonly string[] Keys =
     [
-        "PORT", "DB_PORT", "POLL_INTERVAL", "ALERT_INTERVAL", "POLLING_AUTOSTART",
+        "PORT", "DB_PORT", "POLL_INTERVAL", "ALERT_INTERVAL", "POLLING_AUTOSTART", "LOG_STREAM_ENABLED",
         "DEFAULT_SERIAL_BOOT_DELAY", "ARCHIVE_RUN_HOUR", "MQTT_TOPIC", "TMS_TEST_ENV_KEY",
     ];
 
@@ -36,6 +36,7 @@ public class AppOptionsTests : IDisposable
         Assert.Equal(TimeSpan.FromMinutes(5), o.PollInterval);
         Assert.Equal(TimeSpan.FromSeconds(5), o.AlertInterval);
         Assert.True(o.PollingAutostart);
+        Assert.True(o.LogStreamEnabled);
         Assert.Equal(8899, o.DefaultTcpPort);
         Assert.Equal(9600, o.DefaultSerialBaud);
         Assert.Equal(TimeSpan.FromSeconds(2), o.DefaultSerialBootDelay);
@@ -52,6 +53,7 @@ public class AppOptionsTests : IDisposable
         Environment.SetEnvironmentVariable("PORT", "9090");
         Environment.SetEnvironmentVariable("POLL_INTERVAL", "1m");
         Environment.SetEnvironmentVariable("POLLING_AUTOSTART", "false");
+        Environment.SetEnvironmentVariable("LOG_STREAM_ENABLED", "false");
         Environment.SetEnvironmentVariable("DEFAULT_SERIAL_BOOT_DELAY", "3");
 
         var o = AppOptions.FromEnvironment();
@@ -59,6 +61,7 @@ public class AppOptionsTests : IDisposable
         Assert.Equal(9090, o.Port);
         Assert.Equal(TimeSpan.FromMinutes(1), o.PollInterval);
         Assert.False(o.PollingAutostart);
+        Assert.False(o.LogStreamEnabled);
         Assert.Equal(TimeSpan.FromSeconds(3), o.DefaultSerialBootDelay);
     }
 
