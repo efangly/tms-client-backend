@@ -50,6 +50,11 @@ func RegisterRoutes(app *fiber.App) {
 	api.Get("/temp-logs", GetTempLogs)
 	api.Get("/reports/templog", GetTempLogReport)
 
+	// Report Jobs: generate the temperature Report as a PDF in the background.
+	api.Post("/reports/templog/jobs", CreateReportJob)
+	api.Get("/reports/jobs/:id", GetReportJob)
+	api.Get("/reports/jobs/:id/file", DownloadReportFile)
+
 	// Temperature errors
 	api.Get("/temp-errors", GetTempErrors)
 

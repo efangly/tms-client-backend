@@ -127,6 +127,8 @@ func startServer() {
 	// Routes (including /health) — shared with tests via handlers.RegisterRoutes
 	handlers.RegisterRoutes(fiberApp)
 
+	handlers.StartReportManager("reports")
+
 	// Start polling service
 	log.Println("Starting polling service...")
 	go services.GlobalPollingService.Start()
@@ -171,6 +173,7 @@ func cleanup() {
 	if services.GlobalArchiveService != nil {
 		services.GlobalArchiveService.Stop()
 	}
+	handlers.StopReportManager()
 	if services.GlobalSerialService != nil {
 		services.GlobalSerialService.Stop()
 	}
