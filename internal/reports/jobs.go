@@ -124,6 +124,18 @@ func (m *Manager) Submit(p Params) (Job, error) {
 	}
 }
 
+// Busy reports whether any job is queued or running.
+func (m *Manager) Busy() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, j := range m.jobs {
+		if j.Status == StatusQueued || j.Status == StatusRunning {
+			return true
+		}
+	}
+	return false
+}
+
 // Get returns a snapshot of the job.
 func (m *Manager) Get(id string) (Job, bool) {
 	m.mu.Lock()

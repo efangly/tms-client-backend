@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -16,6 +17,7 @@ import (
 	"tms-backend/internal/handlers"
 	"tms-backend/internal/services"
 	"tms-backend/internal/tray"
+	"tms-backend/internal/updater"
 	"tms-backend/internal/utils"
 	"tms-backend/internal/version"
 )
@@ -54,6 +56,10 @@ func startServer() {
 		log.Printf("Failed to initialize error logger: %v", err)
 	}
 
+	// Start the updater first so a fix can still be installed when the
+	// database or network below is failing.
+	updater.Global.Start()
+
 	// Wait for network to be ready (important for startup)
 	log.Println("Waiting for network connectivity...")
 	if !utils.WaitForNetwork(60 * time.Second) {
@@ -76,6 +82,9 @@ func startServer() {
 		utils.LogError("Failed to connect to database after retries: %v", err)
 		log.Printf("Failed to connect to database: %v", err)
 		tray.SetError("Database connection failed")
+		// The binary itself started fine; don't let a DB outage roll back
+		// a freshly installed update.
+		updater.MarkHealthy(version.Version)
 		return
 	}
 	log.Println("Database connected successfully")
@@ -127,6 +136,12 @@ func startServer() {
 	// Routes (including /health) — shared with tests via handlers.RegisterRoutes
 	handlers.RegisterRoutes(fiberApp)
 
+	// Once serving, confirm a just-installed update to the watchdog.
+	fiberApp.Hooks().OnListen(func(fiber.ListenData) error {
+		updater.MarkHealthy(version.Version)
+		return nil
+	})
+
 	handlers.StartReportManager("reports")
 
 	// Start polling service
@@ -164,9 +179,13 @@ func cleanup() {
 	go func() {
 		time.Sleep(15 * time.Second)
 		log.Println("Cleanup timed out after 15s, forcing exit")
+		spawnUpdateWatchdog()
 		os.Exit(0)
 	}()
 
+	if updater.Global != nil {
+		updater.Global.Stop()
+	}
 	if services.GlobalPollingService != nil {
 		services.GlobalPollingService.Stop()
 	}
@@ -189,12 +208,79 @@ func cleanup() {
 	}
 	utils.CloseLogger()
 	log.Println("Cleanup completed")
+	// The HTTP port is free now, so the updated exe can start.
+	spawnUpdateWatchdog()
 	// Ensure the process always exits after cleanup, regardless of whether
 	// systray's message loop returns cleanly.
 	os.Exit(0)
 }
 
+var spawnWatchdogOnce sync.Once
+
+// spawnUpdateWatchdog hands over to the watchdog (the previous exe), which
+// starts the updated exe and rolls back if it fails. No-op unless the
+// updater just swapped in a new version.
+func spawnUpdateWatchdog() {
+	if !updater.Global.RestartPending() {
+		return
+	}
+	spawnWatchdogOnce.Do(func() {
+		if err := updater.Global.SpawnWatchdog(); err != nil {
+			utils.LogError("Failed to start update watchdog: %v", err)
+			log.Printf("Failed to start update watchdog: %v", err)
+		}
+	})
+}
+
+// setupUpdater builds updater.Global from .env and wires it to the tray.
+func setupUpdater() {
+	cfg, err := updater.ConfigFromEnv()
+	if err != nil {
+		log.Printf("Updater config invalid, auto update disabled: %v", err)
+		cfg.Enabled = false
+	}
+	cfg.Busy = func() bool {
+		return handlers.ReportManager != nil && handlers.ReportManager.Busy()
+	}
+	cfg.Restart = tray.Quit
+	cfg.OnStatus = func(st updater.Status) { tray.SetUpdateStatus(updateMenuText(st)) }
+	updater.Global = updater.New(cfg, version.Version)
+
+	st := updater.Global.Status()
+	tray.SetUpdateStatus(updateMenuText(st))
+	if st.State != updater.StateDisabled {
+		tray.SetUpdater(updater.Global.CheckNow)
+	}
+}
+
+func updateMenuText(st updater.Status) string {
+	switch st.State {
+	case updater.StateDisabled:
+		return "Auto update disabled"
+	case updater.StateChecking:
+		return "Checking for updates..."
+	case updater.StateUpToDate:
+		return "Up to date - check again"
+	case updater.StateDownloading:
+		return "Downloading v" + st.Latest + "..."
+	case updater.StateWaiting:
+		return "Update v" + st.Latest + " ready (waiting)"
+	case updater.StateApplying:
+		return "Installing v" + st.Latest + "..."
+	case updater.StateError:
+		return "Update failed - retry"
+	}
+	return "Check for updates"
+}
+
 func main() {
+	// Watchdog mode: launched from the previous exe after an update to
+	// verify the new one (no tray, no server). See internal/updater.
+	if len(os.Args) == 3 && os.Args[1] == updater.WatchdogFlag {
+		updater.RunWatchdog(os.Args[2])
+		return
+	}
+
 	// --- STARTUP DIAGNOSTIC ---
 	// Write a debug file to diagnose startup issues
 	// This runs before anything else so we can tell if the program starts at all
@@ -241,6 +327,8 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+
+	setupUpdater()
 
 	startupDiag(fmt.Sprintf("[5/5] Starting tray on port %s", port))
 

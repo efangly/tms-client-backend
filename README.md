@@ -95,6 +95,26 @@ curl http://localhost:8080/health
 
 **โลโก้หัวรายงาน:** วางไฟล์ PNG/JPEG ที่ `assets/logo.png` (โฟลเดอร์ข้างไฟล์ .exe — โปรแกรมสร้างให้พร้อมโลโก้เริ่มต้นเมื่อเริ่มทำงาน และจะไม่เขียนทับไฟล์ของคุณ) เปลี่ยนไฟล์แล้วมีผลกับรายงานถัดไปทันทีโดยไม่ต้อง restart ใช้ `LOGO_PATH` เพื่อเปลี่ยนตำแหน่งไฟล์
 
+## 🔄 Auto Update
+
+โปรแกรมจะอัปเดตตัวเองจาก GitHub Releases ของ repo นี้
+
+**ออกเวอร์ชันใหม่:**
+```bash
+git tag v2.1.0
+git push origin v2.1.0
+```
+GitHub Actions (`.github/workflows/release.yml`) จะ test, build `tms-backend.exe` พร้อม `checksums.txt` และสร้าง Release ให้ ส่วน tag ที่มี suffix เช่น `v2.1.0-rc1` จะเป็น pre-release ซึ่งเครื่องลูกข่ายจะไม่ติดตั้ง
+
+**ฝั่งเครื่องที่รันอยู่:**
+1. เช็กครั้งแรก 2 นาทีหลังเปิดโปรแกรม จากนั้นเช็กทุก `UPDATE_CHECK_INTERVAL` (ค่าเริ่มต้น 6h) หรือสั่งเช็กทันทีได้จากเมนู tray หรือ `POST /api/update/check`
+2. ถ้าเจอเวอร์ชันที่ใหม่กว่า จะดาวน์โหลดและตรวจ sha256 ก่อน
+3. รอให้อยู่ใน `UPDATE_WINDOW` (ถ้าตั้งไว้) และไม่มี Report Job ค้างอยู่
+4. สลับไฟล์ exe แล้ว restart ตัวเก่าจะทำหน้าที่ watchdog รอให้ตัวใหม่ขึ้นมาให้บริการภายใน 3 นาที ถ้าไม่ขึ้นจะ **rollback** กลับเป็นตัวเดิม และข้ามเวอร์ชันนั้นไป (ต้องออกเวอร์ชันที่สูงกว่าเพื่อแก้)
+
+ดูสถานะได้ที่ `GET /api/update/status` หรือเมนู tray ส่วน log ของ watchdog อยู่ที่ `logs/update.log`
+build ที่ไม่ใช่ release (`dev` หรือ `git describe` ที่มี `-dirty`/commit ต่อท้าย) จะไม่อัปเดตตัวเอง ปิดการทำงานได้ด้วย `UPDATE_ENABLED=false`
+
 ## 🐛 Troubleshooting
 
 ### ไม่สามารถเชื่อมต่อ Database
