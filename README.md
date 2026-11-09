@@ -32,7 +32,7 @@ DB_USER=root
 DB_PASSWORD=yourpassword
 DB_NAME=tms
 
-# Polling Configuration
+# Polling Configuration (Go duration เช่น 30s, 5m — ต้อง restart หลังแก้ไข)
 POLL_INTERVAL=5m
 ALERT_INTERVAL=5s
 ```
@@ -84,6 +84,16 @@ Press Ctrl+C or close this window to stop the server
 curl http://localhost:8080/health
 ```
 ควรได้: `{"status":"ok"}`
+
+## 📄 รายงาน PDF (Report)
+
+รายงานสร้างที่ backend เป็นงานเบื้องหลัง (ทีละ 1 งาน, สูงสุด 100,000 แถวต่อรายงาน, เก็บไฟล์ 24 ชั่วโมง):
+
+- `POST /api/reports/templog/jobs` — body `{"startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD","devices":"ip:probe,..."}` ได้ `202` พร้อม `jobId`
+- `GET /api/reports/jobs/:id` — สถานะ `queued` / `running` / `done` / `failed` และ `progress`
+- `GET /api/reports/jobs/:id/file` — ดาวน์โหลด PDF เมื่อ `done`
+
+**โลโก้หัวรายงาน:** วางไฟล์ PNG/JPEG ที่ `assets/logo.png` (โฟลเดอร์ข้างไฟล์ .exe — โปรแกรมสร้างให้พร้อมโลโก้เริ่มต้นเมื่อเริ่มทำงาน และจะไม่เขียนทับไฟล์ของคุณ) เปลี่ยนไฟล์แล้วมีผลกับรายงานถัดไปทันทีโดยไม่ต้อง restart ใช้ `LOGO_PATH` เพื่อเปลี่ยนตำแหน่งไฟล์
 
 ## 🐛 Troubleshooting
 

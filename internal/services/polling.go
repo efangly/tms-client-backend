@@ -125,10 +125,26 @@ type PollingService struct {
 	machineCacheMu         sync.Mutex
 }
 
+// durationFromEnv reads a Go duration (e.g. "5m", "30s") from the environment,
+// falling back to def when unset, invalid, or non-positive. Must be called
+// after .env is loaded (i.e. not from init()).
+func durationFromEnv(key string, def time.Duration) time.Duration {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		log.Printf("Invalid %s=%q (want a positive duration like 5m or 30s), using default %v", key, raw, def)
+		return def
+	}
+	return d
+}
+
 func NewPollingService() *PollingService {
 	return &PollingService{
-		pollInterval:           5 * time.Minute,
-		alertInterval:          5 * time.Second,
+		pollInterval:           durationFromEnv("POLL_INTERVAL", 5*time.Minute),
+		alertInterval:          durationFromEnv("ALERT_INTERVAL", 5*time.Second),
 		stopChan:               make(chan struct{}),
 		subscribers:            make([]chan DataSavedEvent, 0),
 		temperatureSubscribers: make([]chan []TemperatureUpdateEvent, 0),

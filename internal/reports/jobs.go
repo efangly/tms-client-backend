@@ -246,7 +246,7 @@ func (m *Manager) run(id string) {
 		return row, more, err
 	}
 
-	res, err := WritePDF(f, j.params.StartDate, j.params.EndDate, next, m.maxRows)
+	res, err := WritePDF(f, j.params.StartDate, j.params.EndDate, next, m.maxRows, Options{Logo: LoadLogo()})
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

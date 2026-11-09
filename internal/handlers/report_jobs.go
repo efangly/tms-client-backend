@@ -28,6 +28,9 @@ var ReportManager *reports.Manager
 // StartReportManager creates and starts the global ReportManager, writing
 // Report Files under dir.
 func StartReportManager(dir string) {
+	if err := reports.EnsureLogoFile(); err != nil {
+		utils.LogError("report - could not create logo file %s: %v", reports.LogoPath(), err)
+	}
 	ReportManager = reports.NewManager(dir, openReportSource, reports.MaxRows, reportQueueLen, reportTTL)
 	ReportManager.Start()
 }
@@ -129,13 +132,18 @@ func openReportSource(p reports.Params) (reports.Source, error) {
 		utils.LogError("report - failed to load machines: %v", err)
 	}
 
+	names := make(map[string]string, len(allMachines))
+	for _, m := range allMachines {
+		names[fmt.Sprintf("%s:%d", m.MachineIP, m.ProbeNo)] = m.MachineName
+	}
+
 	from, to := p.StartDate+" 00:00:00", p.EndDate+" 23:59:59"
 
 	live := database.DB.Model(&models.TempLog{}).Where("insert_time BETWEEN ? AND ?", from, to)
 	if p.Devices != "" {
 		live = applyDeviceFilter(live, p.Devices, allMachines)
 	}
-	liveStream, err := newDBStream(live)
+	liveStream, err := newDBStream(live, names)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +163,7 @@ func openReportSource(p reports.Params) (reports.Source, error) {
 	if p.Devices != "" {
 		arch = applyDeviceFilter(arch, p.Devices, allMachines)
 	}
-	archStream, err := newDBStream(arch)
+	archStream, err := newDBStream(arch, names)
 	if err != nil {
 		liveStream.Close()
 		return nil, err
@@ -173,12 +181,13 @@ type rowStream interface {
 // memory stays constant regardless of result size.
 type dbStream struct {
 	rows  *sql.Rows
+	names map[string]string
 	total int64
 	cur   *reports.Row
 	done  bool
 }
 
-func newDBStream(q *gorm.DB) (*dbStream, error) {
+func newDBStream(q *gorm.DB, names map[string]string) (*dbStream, error) {
 	var total int64
 	if err := q.Session(&gorm.Session{}).Count(&total).Error; err != nil {
 		return nil, err
@@ -190,7 +199,7 @@ func newDBStream(q *gorm.DB) (*dbStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &dbStream{rows: rows, total: total}, nil
+	return &dbStream{rows: rows, total: total, names: names}, nil
 }
 
 func (s *dbStream) Total() int64 { return s.total }
@@ -207,6 +216,7 @@ func (s *dbStream) peek() (reports.Row, bool, error) {
 		if err := s.rows.Scan(&r.IP, &r.ProbeNo, &temp, &r.Time); err != nil {
 			return reports.Row{}, false, err
 		}
+		r.MachineName = s.names[fmt.Sprintf("%s:%d", r.IP, r.ProbeNo)]
 		if temp.Valid {
 			v := temp.Float64
 			r.Temp = &v
