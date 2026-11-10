@@ -174,3 +174,26 @@ func TestManager_StartClearsStaleFiles(t *testing.T) {
 		t.Error("stale file from a previous run should be removed")
 	}
 }
+
+func TestManager_Busy(t *testing.T) {
+	gate := make(chan struct{})
+	m := newTestManager(t, func(Params) (Source, error) {
+		return &fakeSource{rows: makeRows(1), gate: gate}, nil
+	}, 0, 10)
+	if m.Busy() {
+		t.Fatal("idle manager reports busy")
+	}
+	job, _ := m.Submit(Params{})
+	if !m.Busy() {
+		t.Fatal("queued job should make the manager busy")
+	}
+	waitFor(t, m, job.ID, StatusRunning)
+	if !m.Busy() {
+		t.Fatal("running job should make the manager busy")
+	}
+	close(gate)
+	waitFor(t, m, job.ID, StatusDone)
+	if m.Busy() {
+		t.Fatal("finished job should not make the manager busy")
+	}
+}

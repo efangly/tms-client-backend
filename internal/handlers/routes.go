@@ -67,6 +67,10 @@ func RegisterRoutes(app *fiber.App) {
 	// Polling control (POST — triggers a state change)
 	api.Post("/poll", TriggerPoll)
 
+	// Auto update (internal/updater)
+	api.Get("/update/status", GetUpdateStatus)
+	api.Post("/update/check", CheckForUpdate)
+
 	// SSE for real-time updates
 	api.Get("/temperature-stream", TemperatureStream)
 }

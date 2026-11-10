@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/getlantern/systray"
 	"golang.org/x/sys/windows/registry"
@@ -18,7 +19,33 @@ import (
 var (
 	onExitCallback func()
 	serverPort     string
+
+	// Auto update (see internal/updater). Wired by main via SetUpdater.
+	onCheckUpdates func()
+	updateMu       sync.Mutex // guards mUpdate, updateText
+	mUpdate        *systray.MenuItem
+	updateText     = "Check for updates"
 )
+
+// SetUpdater registers the "Check for updates" action. Call before Run.
+func SetUpdater(checkNow func()) {
+	onCheckUpdates = checkNow
+}
+
+// SetUpdateStatus shows the updater's state on the update menu item.
+func SetUpdateStatus(text string) {
+	updateMu.Lock()
+	defer updateMu.Unlock()
+	updateText = text
+	if mUpdate != nil {
+		mUpdate.SetTitle(text)
+	}
+}
+
+// Quit exits the tray loop, which runs the cleanup passed to Run.
+func Quit() {
+	systray.Quit()
+}
 
 // Run starts the system tray application. This blocks the main goroutine.
 // startServer is called when the tray is ready, and should start the actual server in a goroutine.
@@ -47,8 +74,17 @@ func onReady(startServer func()) {
 
 	systray.AddSeparator()
 
+	updateMu.Lock()
+	mUpdate = systray.AddMenuItem(updateText, "Check GitHub for a newer version and install it")
+	updateMu.Unlock()
+	if onCheckUpdates == nil {
+		mUpdate.Disable()
+	}
+
+	systray.AddSeparator()
+
 	// Startup menu item
-	mStartup := systray.AddMenuItem("Run at Windows Startup", "Configure to run when Windows starts")
+	mStartup :=systray.AddMenuItem("Run at Windows Startup", "Configure to run when Windows starts")
 	if IsInStartup() {
 		mStartup.Check()
 	}
@@ -91,6 +127,11 @@ func onReady(startServer func()) {
 						mStartup.Check()
 						log.Println("Added to Windows startup")
 					}
+				}
+			case <-mUpdate.ClickedCh:
+				if onCheckUpdates != nil {
+					log.Println("Manual update check requested from tray")
+					onCheckUpdates()
 				}
 			case <-mQuit.ClickedCh:
 				systray.Quit()

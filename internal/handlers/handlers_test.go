@@ -26,6 +26,7 @@ import (
 	"tms-backend/internal/models"
 	"tms-backend/internal/services"
 	"tms-backend/internal/testutil"
+	"tms-backend/internal/updater"
 	"tms-backend/internal/version"
 )
 
@@ -1054,3 +1055,26 @@ var _ error = errorString("")
 // Verify we're not accidentally importing bytes or io unused.
 var _ = bytes.NewReader
 var _ = io.ReadAll
+
+func TestUpdateStatus_NoUpdater(t *testing.T) {
+	app := fiber.New()
+	handlers.RegisterRoutes(app)
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/api/update/status", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st updater.Status
+	json.NewDecoder(resp.Body).Decode(&st)
+	if resp.StatusCode != 200 || st.State != updater.StateDisabled || st.Current != version.Version {
+		t.Errorf("status %d, body %+v", resp.StatusCode, st)
+	}
+
+	resp, err = app.Test(httptest.NewRequest("POST", "/api/update/check", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != fiber.StatusConflict {
+		t.Errorf("check status = %d, want 409", resp.StatusCode)
+	}
+}
