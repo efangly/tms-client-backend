@@ -16,6 +16,7 @@ import (
 	"tms-backend/internal/database"
 	"tms-backend/internal/handlers"
 	"tms-backend/internal/services"
+	"tms-backend/internal/singleton"
 	"tms-backend/internal/tray"
 	"tms-backend/internal/updater"
 	"tms-backend/internal/utils"
@@ -164,10 +165,23 @@ func startServer() {
 
 	tray.SetRunning()
 
-	if err := fiberApp.Listen(":" + port); err != nil {
+	// Right after an update the previous process may still be releasing the
+	// port, so retry the bind for a while before giving up.
+	ln, err := utils.ListenWithRetry(":"+port, 60*time.Second, 500*time.Millisecond)
+	if err == nil {
+		err = fiberApp.Listener(ln)
+	}
+	if err != nil {
 		utils.LogError("Failed to start server: %v", err)
 		log.Printf("Failed to start server: %v", err)
+		if holder := utils.DescribePortHolder(port); holder != "" {
+			utils.LogError("%s", holder)
+			log.Println(holder)
+		}
 		tray.SetError(fmt.Sprintf("Port %s in use", port))
+		// The binary itself works; a busy port is environmental, so don't
+		// roll back (and permanently skip) a freshly installed update.
+		updater.MarkHealthy(version.Version)
 	}
 }
 
@@ -179,6 +193,10 @@ func cleanup() {
 	go func() {
 		time.Sleep(15 * time.Second)
 		log.Println("Cleanup timed out after 15s, forcing exit")
+		// Release the HTTP port before handing over, or the new exe can't bind.
+		if fiberApp != nil {
+			fiberApp.ShutdownWithTimeout(2 * time.Second)
+		}
 		spawnUpdateWatchdog()
 		os.Exit(0)
 	}()
@@ -278,6 +296,14 @@ func main() {
 	// verify the new one (no tray, no server). See internal/updater.
 	if len(os.Args) == 3 && os.Args[1] == updater.WatchdogFlag {
 		updater.RunWatchdog(os.Args[2])
+		return
+	}
+
+	// One instance per machine. After an update the old instance may still be
+	// exiting, so wait for it before giving up.
+	if !singleton.Acquire(`Global\TMSBackendServer`, 30*time.Second) {
+		log.Println("Another TMS Backend instance is already running, exiting")
+		startupDiag("[ERROR] another instance is running, exiting")
 		return
 	}
 
