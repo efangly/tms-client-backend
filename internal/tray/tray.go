@@ -66,6 +66,9 @@ func onReady(startServer func()) {
 	mStatus := systray.AddMenuItem("TMS Backend - Running", "Server status")
 	mStatus.Disable()
 
+	mVersion := systray.AddMenuItem("Version "+version.Version, "Current version")
+	mVersion.Disable()
+
 	systray.AddSeparator()
 
 	mOpenBrowser := systray.AddMenuItem("Open Health Check", "Open browser to health check endpoint")
@@ -151,7 +154,7 @@ func onExit() {
 // SetError updates the tray icon to indicate an error state
 func SetError(msg string) {
 	systray.SetIcon(RedIcon())
-	systray.SetTooltip(fmt.Sprintf("TMS Backend - ERROR: %s", msg))
+	systray.SetTooltip(fmt.Sprintf("TMS Backend %s - ERROR: %s", version.Version, msg))
 }
 
 // SetRunning updates the tray icon to indicate running state
