@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -294,8 +295,12 @@ func updateMenuText(st updater.Status) string {
 func main() {
 	// Watchdog mode: launched from the previous exe after an update to
 	// verify the new one (no tray, no server). See internal/updater.
-	if len(os.Args) == 3 && os.Args[1] == updater.WatchdogFlag {
-		updater.RunWatchdog(os.Args[2])
+	if len(os.Args) >= 3 && os.Args[1] == updater.WatchdogFlag {
+		oldPID := 0
+		if len(os.Args) >= 4 {
+			oldPID, _ = strconv.Atoi(os.Args[3])
+		}
+		updater.RunWatchdog(os.Args[2], oldPID)
 		return
 	}
 

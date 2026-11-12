@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,10 +21,14 @@ const WatchdogFlag = "--update-watchdog"
 // startup waits up to 60s for the network and ~30s for DB retries.
 const watchdogTimeout = 3 * time.Minute
 
+// oldExitGrace is how long the previous app gets to exit on its own before
+// the watchdog terminates it.
+const oldExitGrace = 10 * time.Second
+
 // SpawnWatchdog starts the previous binary (now exe.old) in watchdog mode.
 // Called by the app's cleanup, after the HTTP server has released its port.
 func (s *Service) SpawnWatchdog() error {
-	cmd := exec.Command(s.files.oldExe, WatchdogFlag, s.files.exe)
+	cmd := exec.Command(s.files.oldExe, WatchdogFlag, s.files.exe, strconv.Itoa(os.Getpid()))
 	cmd.Dir = filepath.Dir(s.files.exe)
 	detach(cmd)
 	return cmd.Start()
@@ -31,11 +36,24 @@ func (s *Service) SpawnWatchdog() error {
 
 // RunWatchdog is the entry point for watchdog mode. It starts the new exe,
 // waits for it to write the healthy marker, and rolls back otherwise.
-func RunWatchdog(exe string) {
+func RunWatchdog(exe string, oldPID int) {
 	f := filesFor(exe)
 	if lf, err := openWatchdogLog(filepath.Dir(exe)); err == nil {
 		log.SetOutput(lf)
 		defer lf.Close()
+	}
+	// Never linger: the watchdog is itself exe.old and would otherwise keep
+	// that file (and anything it holds) alive if something below hangs.
+	time.AfterFunc(watchdogTimeout+2*time.Minute, func() {
+		log.Printf("watchdog: hard timeout, exiting")
+		os.Exit(1)
+	})
+	// The previous app must be gone before the new one starts, or it keeps
+	// holding serial ports. It normally exits right after spawning us.
+	if err := ensureExited(oldPID, f.oldExe, oldExitGrace); err != nil {
+		log.Printf("watchdog: could not stop previous process %d: %v", oldPID, err)
+	} else if oldPID > 0 {
+		log.Printf("watchdog: previous process %d is gone", oldPID)
 	}
 	st := loadState(f.state)
 	if !st.Pending {
